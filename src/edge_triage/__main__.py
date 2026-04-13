@@ -172,16 +172,35 @@ def _run_streamlit_dashboard() -> None:
 
         st.markdown("---")
         st.markdown("### Input Source")
-        uploaded_files = st.file_uploader(
-            "Upload tiles (TIFF / JPG / PNG)",
-            type=["tif", "tiff", "jpg", "jpeg", "png"],
-            accept_multiple_files=True,
+
+        input_mode = st.radio(
+            "Tile Source",
+            ["Mission Scenarios", "Upload Files", "Synthetic"],
+            horizontal=True,
+            help="Mission Scenarios: 3 pre-built ops with 8 tiles each",
         )
 
-        n_synthetic = st.slider(
-            "Synthetic test tiles", 0, 20, 3 if not uploaded_files else 0,
-            help="Generate random tiles for testing",
-        )
+        uploaded_files = None
+        n_synthetic = 0
+        selected_scenarios: list[str] = []
+
+        if input_mode == "Upload Files":
+            uploaded_files = st.file_uploader(
+                "Upload tiles (TIFF / JPG / PNG)",
+                type=["tif", "tiff", "jpg", "jpeg", "png"],
+                accept_multiple_files=True,
+            )
+        elif input_mode == "Synthetic":
+            n_synthetic = st.slider(
+                "Synthetic test tiles", 1, 20, 3,
+                help="Generate random tiles for testing",
+            )
+        else:
+            selected_scenarios = st.multiselect(
+                "Select scenarios",
+                ["Wildfire Detection (California)", "Defense ISR (Maritime)", "Disaster Response (Earthquake)"],
+                default=["Wildfire Detection (California)", "Defense ISR (Maritime)", "Disaster Response (Earthquake)"],
+            )
 
         st.markdown("---")
         st.markdown(f"""
@@ -201,19 +220,86 @@ def _run_streamlit_dashboard() -> None:
     #  TAB 1: TRIAGE PIPELINE
     # ════════════════════════════════════════════════════════════
     with tab_triage:
-        # Build tile list
-        tiles = []
-        tile_names = []
+        # ── Scenario definitions ──────────────────────────────────
+        MISSION_SCENARIOS = {
+            "Wildfire Detection (California)": {
+                "context": "Active wildfire monitoring — smoke plumes and thermal anomalies expected",
+                "scene_id": "FIRE-CA-2026-041",
+                "tiles": [
+                    ("Hot spot — bright IR",     0.7, 1.0, 42),
+                    ("Smoke plume edge",         0.5, 0.9, 43),
+                    ("Clear forest canopy",      0.2, 0.5, 44),
+                    ("Heavy cloud cover",        0.85, 1.0, 45),
+                    ("Burn scar boundary",       0.3, 0.8, 46),
+                    ("Urban edge near fire",     0.4, 0.7, 47),
+                    ("Night thermal IR",         0.6, 0.95, 48),
+                    ("Water body (lake)",        0.05, 0.2, 49),
+                ],
+            },
+            "Defense ISR (Maritime)": {
+                "context": "Defense maritime ISR — vessel detection in contested waters, high priority",
+                "scene_id": "ISR-PAC-2026-088",
+                "tiles": [
+                    ("Open ocean — no targets",  0.1, 0.3, 50),
+                    ("Vessel wake signature",    0.4, 0.75, 51),
+                    ("Port infrastructure",      0.35, 0.65, 52),
+                    ("Cloud-obscured zone",      0.88, 1.0, 53),
+                    ("Coastal radar shadow",     0.15, 0.45, 54),
+                    ("Fleet formation",          0.5, 0.85, 55),
+                    ("Oil spill anomaly",        0.25, 0.6, 56),
+                    ("Island coastline",         0.2, 0.55, 57),
+                ],
+            },
+            "Disaster Response (Earthquake)": {
+                "context": "Post-earthquake damage assessment — collapsed structures, road blockages, survivor detection",
+                "scene_id": "HADR-TUR-2026-003",
+                "tiles": [
+                    ("Collapsed building zone",  0.45, 0.8, 60),
+                    ("Intact neighborhood",      0.2, 0.45, 61),
+                    ("Blocked highway",          0.35, 0.7, 62),
+                    ("Dust cloud / debris",      0.7, 0.95, 63),
+                    ("Refugee camp forming",     0.3, 0.6, 64),
+                    ("Bridge damage",            0.5, 0.85, 65),
+                    ("Agricultural field",       0.15, 0.35, 66),
+                    ("Hospital / triage area",   0.4, 0.75, 67),
+                ],
+            },
+        }
 
-        if uploaded_files:
+        def _make_tile(lo: float, hi: float, seed: int) -> np.ndarray:
+            return np.random.default_rng(seed).uniform(lo, hi, (13, 256, 256)).astype(np.float32)
+
+        # ── Build tile list ───────────────────────────────────────
+        tiles: list[np.ndarray] = []
+        tile_names: list[str] = []
+        tile_metadata: list[dict] = []
+
+        if input_mode == "Mission Scenarios" and selected_scenarios:
+            for scenario_name in selected_scenarios:
+                scenario = MISSION_SCENARIOS[scenario_name]
+                for i, (label, lo, hi, seed) in enumerate(scenario["tiles"], 1):
+                    tiles.append(_make_tile(lo, hi, seed))
+                    tile_names.append(f"[{scenario_name.split('(')[0].strip()}] {label}")
+                    tile_metadata.append({
+                        "context": scenario["context"],
+                        "tile_id": f"{scenario['scene_id']}-T{i:03d}",
+                        "scene_id": scenario["scene_id"],
+                    })
+
+        elif input_mode == "Upload Files" and uploaded_files:
             from PIL import Image as PILImage
             for uf in uploaded_files:
                 pil = PILImage.open(uf).convert("RGB")
                 arr = np.array(pil, dtype=np.float32) / 255.0
                 tiles.append(arr)
                 tile_names.append(uf.name)
+                tile_metadata.append({
+                    "context": mission_context,
+                    "tile_id": f"upload_{uf.name}",
+                    "scene_id": f"session_{int(time.time())}",
+                })
 
-        if n_synthetic > 0:
+        elif input_mode == "Synthetic" and n_synthetic > 0:
             synthetic_configs = [
                 ("Clear sky (high value)", lambda i: np.random.default_rng(i).random((256, 256, 3), dtype=np.float32) * 0.35),
                 ("Heavy cloud", lambda i: np.ones((256, 256, 3), dtype=np.float32) * (0.82 + np.random.default_rng(i).random() * 0.1)),
@@ -226,17 +312,25 @@ def _run_streamlit_dashboard() -> None:
                 name, gen = synthetic_configs[idx]
                 tiles.append(gen(i))
                 tile_names.append(f"Synthetic: {name}")
+                tile_metadata.append({
+                    "context": mission_context,
+                    "tile_id": f"tile_{i:04d}",
+                    "scene_id": f"session_{int(time.time())}",
+                })
 
         if tiles:
-            st.markdown(f"**{len(tiles)} tile(s) ready** | Context: _{mission_context}_")
+            n_scenarios = len(selected_scenarios) if input_mode == "Mission Scenarios" else 0
+            label = f"**{len(tiles)} tile(s)** across **{n_scenarios} scenario(s)**" if n_scenarios else f"**{len(tiles)} tile(s) ready**"
+            st.markdown(label)
         else:
-            st.info("Upload images or enable synthetic tiles in the sidebar to begin.")
+            st.info("Select scenarios, upload images, or enable synthetic tiles in the sidebar to begin.")
 
-        # Process button
-        if tiles and st.button("Process All Tiles", type="primary", use_container_width=True):
+        # ── Process button ────────────────────────────────────────
+        if tiles and st.button("Run Triage on All Tiles", type="primary", use_container_width=True):
             engine = EdgeTriageEngine(audit=False)
             st.session_state.results = []
             st.session_state.collector = MetricsCollector()
+            st.session_state.processing_log = []
 
             progress = st.progress(0, text="Initializing pipeline...")
             for i, tile in enumerate(tiles):
@@ -244,17 +338,18 @@ def _run_streamlit_dashboard() -> None:
                     (i + 1) / len(tiles),
                     text=f"Processing tile {i + 1}/{len(tiles)}: {tile_names[i]}",
                 )
-                metadata = {
+                meta = tile_metadata[i] if i < len(tile_metadata) else {
                     "context": mission_context,
                     "tile_id": f"tile_{i:04d}",
                     "scene_id": f"session_{int(time.time())}",
                 }
-                result = engine.process_tile(tile, metadata)
+                result = engine.process_tile(tile, meta)
                 st.session_state.collector.record(tile, result)
                 st.session_state.results.append((tile_names[i], tile, result))
                 st.session_state.processing_log.append({
                     "time": time.strftime("%H:%M:%S"),
                     "tile": tile_names[i],
+                    "scenario": meta.get("scene_id", ""),
                     "decision": "KEEP" if result.keep else "FILTER",
                     "score": round(result.final_score, 3),
                 })
@@ -264,7 +359,7 @@ def _run_streamlit_dashboard() -> None:
         # Display results
         results = st.session_state.results
         if results:
-            # KPI row
+            # ── Overall KPI row ────────────────────────────────────
             summary = st.session_state.collector.metrics.summary()
             k1, k2, k3, k4, k5 = st.columns(5)
             k1.metric("Tiles", summary["tiles_processed"])
@@ -275,86 +370,135 @@ def _run_streamlit_dashboard() -> None:
 
             st.markdown("---")
 
-            # Per-tile result cards
+            # ── Group results by scenario ──────────────────────────
+            # Extract scenario from tile name: "[Scenario] tile label"
+            from collections import OrderedDict
+            grouped: OrderedDict[str, list[tuple[int, str, np.ndarray, TriageResult]]] = OrderedDict()
             for i, (name, tile, result) in enumerate(results):
-                decision_class = "keep" if result.keep else "filter"
-                decision_badge = "decision-keep" if result.keep else "decision-filter"
-                decision_text = "KEEP" if result.keep else "FILTER"
+                if name.startswith("["):
+                    scenario_key = name.split("]")[0].strip("[").strip()
+                    tile_label = name.split("]")[1].strip()
+                else:
+                    scenario_key = "Results"
+                    tile_label = name
+                grouped.setdefault(scenario_key, []).append((i, tile_label, tile, result))
 
-                with st.container():
-                    st.markdown(f'<div class="tile-card {decision_class}">', unsafe_allow_html=True)
-                    cols = st.columns([1.2, 1, 1, 1, 2])
+            for scenario_key, group in grouped.items():
+                # Scenario header with stats
+                group_kept = sum(1 for _, _, _, r in group if r.keep)
+                group_filtered = len(group) - group_kept
+                group_bw = np.mean([r.bandwidth_saved_percent for _, _, _, r in group])
 
-                    with cols[0]:
-                        st.markdown(f"**Tile {i+1}:** {name}")
-                        st.markdown(
-                            f'<span class="{decision_badge}">{decision_text}</span>',
-                            unsafe_allow_html=True,
-                        )
-                        st.caption(f"Score: {result.final_score:.3f}")
+                scenario_colors = {
+                    "Wildfire Detection": "#e65100",
+                    "Defense ISR": "#1565c0",
+                    "Disaster Response": "#c62828",
+                }
+                bar_color = scenario_colors.get(scenario_key, "#37474f")
 
-                    with cols[1]:
-                        cloud = result.cnn_results.get("cloud_fraction", 0)
-                        st.markdown("**Cloud**")
-                        st.progress(min(cloud, 1.0))
-                        st.caption(f"{cloud:.1%}")
+                st.markdown(f"""
+                <div style="background: linear-gradient(90deg, {bar_color} 0%, {bar_color}33 100%);
+                            color: #fff; padding: 0.8rem 1.2rem; border-radius: 8px; margin: 1rem 0 0.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong style="font-size: 1.1rem;">{scenario_key}</strong>
+                            <span style="opacity: 0.8; margin-left: 0.8rem; font-size: 0.85rem;">
+                                {len(group)} tiles
+                            </span>
+                        </div>
+                        <div style="font-size: 0.85rem;">
+                            <span style="background: #1b5e20; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
+                                KEEP {group_kept}
+                            </span>
+                            <span style="background: #b71c1c; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
+                                FILTER {group_filtered}
+                            </span>
+                            <span style="opacity: 0.8;">BW saved: {group_bw:.0f}%</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-                    with cols[2]:
-                        anomaly = result.cnn_results.get("anomaly_score", 0)
-                        st.markdown("**Anomaly**")
-                        st.progress(min(anomaly, 1.0))
-                        st.caption(f"{anomaly:.1%}")
+                # Per-tile result cards within scenario
+                for idx, (i, tile_label, tile, result) in enumerate(group):
+                    decision_class = "keep" if result.keep else "filter"
+                    decision_badge = "decision-keep" if result.keep else "decision-filter"
+                    decision_text = "KEEP" if result.keep else "FILTER"
 
-                    with cols[3]:
-                        value = result.cnn_results.get("value_score", 0)
-                        st.markdown("**Value**")
-                        st.progress(min(value, 1.0))
-                        st.caption(f"{value:.1%}")
+                    with st.container():
+                        st.markdown(f'<div class="tile-card {decision_class}">', unsafe_allow_html=True)
+                        cols = st.columns([1.2, 1, 1, 1, 2])
 
-                    with cols[4]:
-                        st.markdown("**Explanation**")
-                        explanation_lines = result.explanation.split("\n")
-                        st.caption("\n".join(explanation_lines[:4]))
-                        if result.actions:
-                            st.caption("Actions: " + " | ".join(result.actions[:3]))
-
-                    # Expandable details
-                    with st.expander(f"Full details — Tile {i+1}"):
-                        d1, d2, d3 = st.columns(3)
-                        d1.markdown(f"""
-                        - **Backend:** `{result.cnn_results.get('backend', '?')}`
-                        - **Inference:** {result.cnn_results.get('inference_ms', 0):.2f} ms
-                        - **Power:** {result.power_used_watts:.2f} W
-                        """)
-                        d2.markdown(f"""
-                        - **Tile ID:** `{result.tile_id}`
-                        - **Scene ID:** `{result.scene_id}`
-                        - **BW Saved:** {result.bandwidth_saved_percent:.1f}%
-                        """)
-                        d3.markdown(f"""
-                        - **Input Hash:** `{result.input_hash[:16]}...`
-                        - **Timestamp:** {result.processing_timestamp_utc}
-                        - **Timed Out:** {result.inference_timed_out}
-                        """)
-
-                        if result.cnn_results.get("backend") == "stub":
-                            st.warning(
-                                "Stub backend active — scores are simulated. "
-                                "Deploy a trained ONNX model for production inference."
+                        with cols[0]:
+                            st.markdown(f"**Tile {idx+1}:** {tile_label}")
+                            st.markdown(
+                                f'<span class="{decision_badge}">{decision_text}</span>',
+                                unsafe_allow_html=True,
                             )
+                            st.caption(f"Score: {result.final_score:.3f}")
 
-                        st.markdown("**Full explanation:**")
-                        st.code(result.explanation, language=None)
+                        with cols[1]:
+                            cloud = result.cnn_results.get("cloud_fraction", 0)
+                            st.markdown("**Cloud**")
+                            st.progress(min(cloud, 1.0))
+                            st.caption(f"{cloud:.1%}")
 
-                        # Show tile thumbnail
-                        if tile.ndim == 3 and tile.shape[-1] == 3:
-                            st.image(
-                                np.clip(tile, 0, 1),
-                                caption=f"Input tile ({tile.shape[1]}x{tile.shape[0]})",
-                                width=200,
-                            )
+                        with cols[2]:
+                            anomaly = result.cnn_results.get("anomaly_score", 0)
+                            st.markdown("**Anomaly**")
+                            st.progress(min(anomaly, 1.0))
+                            st.caption(f"{anomaly:.1%}")
 
-                    st.markdown("</div>", unsafe_allow_html=True)
+                        with cols[3]:
+                            value = result.cnn_results.get("value_score", 0)
+                            st.markdown("**Value**")
+                            st.progress(min(value, 1.0))
+                            st.caption(f"{value:.1%}")
+
+                        with cols[4]:
+                            st.markdown("**Explanation**")
+                            explanation_lines = result.explanation.split("\n")
+                            st.caption("\n".join(explanation_lines[:4]))
+                            if result.actions:
+                                st.caption("Actions: " + " | ".join(result.actions[:3]))
+
+                        # Expandable details
+                        with st.expander(f"Full details — {tile_label}"):
+                            d1, d2, d3 = st.columns(3)
+                            d1.markdown(f"""
+                            - **Backend:** `{result.cnn_results.get('backend', '?')}`
+                            - **Inference:** {result.cnn_results.get('inference_ms', 0):.2f} ms
+                            - **Power:** {result.power_used_watts:.2f} W
+                            """)
+                            d2.markdown(f"""
+                            - **Tile ID:** `{result.tile_id}`
+                            - **Scene ID:** `{result.scene_id}`
+                            - **BW Saved:** {result.bandwidth_saved_percent:.1f}%
+                            """)
+                            d3.markdown(f"""
+                            - **Input Hash:** `{result.input_hash[:16]}...`
+                            - **Timestamp:** {result.processing_timestamp_utc}
+                            - **Timed Out:** {result.inference_timed_out}
+                            """)
+
+                            if result.cnn_results.get("backend") == "stub":
+                                st.warning(
+                                    "Stub backend active — scores are simulated. "
+                                    "Deploy a trained ONNX model for production inference."
+                                )
+
+                            st.markdown("**Full explanation:**")
+                            st.code(result.explanation, language=None)
+
+                            # Show tile thumbnail for RGB tiles
+                            if tile.ndim == 3 and tile.shape[-1] == 3:
+                                st.image(
+                                    np.clip(tile, 0, 1),
+                                    caption=f"Input tile ({tile.shape[1]}x{tile.shape[0]})",
+                                    width=200,
+                                )
+
+                        st.markdown("</div>", unsafe_allow_html=True)
 
     # ════════════════════════════════════════════════════════════
     #  TAB 2: ANALYTICS

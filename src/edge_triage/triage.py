@@ -207,7 +207,8 @@ class EdgeTriageEngine:
         """Run inference with a wall-clock timeout ceiling."""
         timeout_sec = config.MAX_INFERENCE_MS / 1000.0
         # SIGALRM only works on Unix; fall back to post-check on other platforms
-        use_signal = hasattr(signal, "SIGALRM")
+        import threading
+        use_signal = hasattr(signal, "SIGALRM") and threading.current_thread() is threading.main_thread()
         if use_signal:
             old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
             signal.setitimer(signal.ITIMER_REAL, timeout_sec)

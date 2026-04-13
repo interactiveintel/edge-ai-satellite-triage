@@ -1,0 +1,11 @@
+# Pinned production dependencies for Docker / Jetson deployment.
+# L4T base image (nvcr.io/nvidia/l4t-ml) pre-installs torch, torchvision,
+# onnxruntime, tensorrt, CUDA — do NOT duplicate those here.
+#
+# For development: pip install -e ".[dev]"
+# For full install: pip install -e ".[all]"
+
+numpy>=1.24,<2.0
+Pillow>=10.0,<11.0
+opencv-python-headless>=4.8,<5.0
+streamlit>=1.28,<2.0

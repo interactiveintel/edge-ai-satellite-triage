@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edge-triage"
+version = "0.1.0"
+description = "Onboard satellite data triage for bandwidth-constrained edge AI platforms"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Paul Pereira"}]
+keywords = ["edge-ai", "satellite", "triage", "jetson", "tensorrt"]
+
+dependencies = [
+    "numpy>=1.24",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+ml = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "onnx>=1.14",
+    "onnxruntime>=1.16",
+    "opencv-python-headless>=4.8",
+]
+dashboard = [
+    "streamlit>=1.28",
+]
+jetson = [
+    "jetson-stats>=4.2",
+    "tensorrt>=8.6",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "bandit>=1.7",
+    "pip-audit>=2.6",
+]
+all = [
+    "edge-triage[ml,dashboard]",
+]
+
+[project.scripts]
+edge-triage = "edge_triage.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

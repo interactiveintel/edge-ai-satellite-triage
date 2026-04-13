@@ -1,0 +1,11 @@
+__pycache__
+*.pyc
+.git
+.pytest_cache
+*.egg-info
+data/
+notebooks/
+*.docx
+~$*
+.claude/
+logs/

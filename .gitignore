@@ -36,6 +36,12 @@ data/
 logs/
 *.jsonl
 
+# Local secrets (API keys, never commit)
+.edge_triage/
+secrets.json
+*.secrets.json
+.edge_triage_secrets.json
+
 # SBOM (generated artifact)
 sbom.json
 

@@ -643,13 +643,90 @@ def _run_streamlit_dashboard() -> None:
             AOI_PRESETS, GOES_SECTOR_PRESETS, SOURCES,
             FIRMSFireSource, NOAAGOESSource, Sentinel2Source,
         )
+        from .secrets_store import KNOWN_KEYS, secrets as _secrets_store
 
         st.markdown("### Live Satellite Feed")
         st.caption(
             "Pulls real imagery from public APIs. No authentication required for "
-            "Sentinel-2 or NOAA GOES. FIRMS needs a free MAP_KEY via the "
-            "`EDGE_TRIAGE_FIRMS_KEY` env var."
+            "Sentinel-2 or NOAA GOES. FIRMS needs a free MAP_KEY — set it below."
         )
+
+        # ── API Key setup expander ──────────────────────────────
+        firms_status = _secrets_store.all_status().get("firms", {})
+        key_set = firms_status.get("set", False)
+        key_source = firms_status.get("source", "unset")
+        key_redacted = firms_status.get("redacted", "")
+
+        status_dot = "&#9679;"
+        if key_set and key_source == "env":
+            status_html = f'<span style="color:#2e7d32;">{status_dot}</span> Set via env var'
+        elif key_set and key_source == "file":
+            status_html = f'<span style="color:#2e7d32;">{status_dot}</span> Saved locally'
+        else:
+            status_html = f'<span style="color:#c62828;">{status_dot}</span> Not set'
+
+        with st.expander(
+            "NASA FIRMS MAP_KEY setup  " + ("✓" if key_set else "— required for fires"),
+            expanded=not key_set,
+        ):
+            st.markdown(f"**Status:** {status_html}", unsafe_allow_html=True)
+            if key_set:
+                st.caption(f"Key value (redacted): `{key_redacted}`  |  Source: `{key_source}`")
+
+            st.markdown("""
+            **Setup steps:**
+            1. Visit [firms.modaps.eosdis.nasa.gov/api/map_key](https://firms.modaps.eosdis.nasa.gov/api/map_key/)
+            2. Enter your email; NASA emails you a MAP_KEY within a minute
+            3. Paste it below and click **Save**, or export it in your shell as
+               `export EDGE_TRIAGE_FIRMS_KEY=your_key_here`
+            4. Click **Test** to verify the key works
+            """)
+
+            setup_cols = st.columns([3, 1, 1, 1])
+            with setup_cols[0]:
+                entered_key = st.text_input(
+                    "Paste MAP_KEY here",
+                    value="",
+                    type="password",
+                    help="The key is stored locally at ~/.edge_triage/secrets.json with 0600 perms. "
+                         "It's gitignored and never logged in plain text.",
+                    placeholder="e.g. 1a2b3c4d5e6f7g8h9i0j",
+                    label_visibility="collapsed",
+                    key="firms_key_input",
+                )
+            with setup_cols[1]:
+                save_clicked = st.button("Save", type="primary", use_container_width=True)
+            with setup_cols[2]:
+                test_clicked = st.button("Test", use_container_width=True)
+            with setup_cols[3]:
+                clear_clicked = st.button("Clear", use_container_width=True,
+                                          disabled=key_source != "file")
+
+            if save_clicked and entered_key.strip():
+                _secrets_store.set("firms", entered_key.strip())
+                st.success("MAP_KEY saved to local secrets file.")
+                st.rerun()
+            elif save_clicked:
+                st.warning("Paste a key before clicking Save.")
+
+            if test_clicked:
+                with st.spinner("Pinging FIRMS status endpoint..."):
+                    ok, msg = _secrets_store.test("firms")
+                if ok:
+                    st.success(f"✓ {msg}")
+                else:
+                    st.error(f"✗ {msg}")
+
+            if clear_clicked:
+                _secrets_store.delete("firms")
+                st.info("Cleared saved MAP_KEY from local secrets file.")
+                st.rerun()
+
+            if key_source == "env":
+                st.info(
+                    "Key is coming from the `EDGE_TRIAGE_FIRMS_KEY` environment variable. "
+                    "Unset it to use the local file instead, or set it to override the file."
+                )
 
         live_col1, live_col2 = st.columns([1, 2])
 
@@ -694,12 +771,19 @@ def _run_streamlit_dashboard() -> None:
                         items = gsrc.fetch(GOES_SECTOR_PRESETS[sector_name])
                     else:
                         fsrc = FIRMSFireSource(days=int(firms_days))
-                        items = fsrc.fetch(AOI_PRESETS[aoi_name])
+                        if not fsrc.map_key:
+                            st.error(
+                                "No FIRMS MAP_KEY found. Open the "
+                                "**NASA FIRMS MAP_KEY setup** expander above to add one."
+                            )
+                            items = []
+                        else:
+                            items = fsrc.fetch(AOI_PRESETS[aoi_name])
 
                 if not items:
                     st.warning(
                         "No scenes returned. Possible causes: no recent imagery for this AOI, "
-                        "network issue, or (for FIRMS) missing `EDGE_TRIAGE_FIRMS_KEY`."
+                        "or a network issue."
                     )
                 else:
                     st.success(f"Fetched {len(items)} scene(s) — running triage pipeline...")

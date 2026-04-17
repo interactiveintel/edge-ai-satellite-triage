@@ -16,6 +16,7 @@ from .live_data import (
 )
 from .metrics import MetricsCollector
 from .model_registry import ModelRegistry
+from .secrets_store import SecretsStore, secrets
 from .triage import EdgeTriageEngine, TriageResult
 from .utils import PowerMonitor
 
@@ -35,6 +36,8 @@ __all__ = [
     "ObjectDetector",
     "PowerMonitor",
     "QuantizedInferencer",
+    "secrets",
+    "SecretsStore",
     "Sentinel2Source",
     "TriageResult",
     "__version__",

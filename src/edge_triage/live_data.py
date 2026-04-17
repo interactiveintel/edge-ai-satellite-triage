@@ -281,14 +281,22 @@ FIRMS_API = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
 class FIRMSFireSource:
     """Fetch recent VIIRS active fire detections.
 
-    Requires a free MAP_KEY from https://firms.modaps.eosdis.nasa.gov/api/
-    Read from ``EDGE_TRIAGE_FIRMS_KEY`` env var.
+    Requires a free MAP_KEY from https://firms.modaps.eosdis.nasa.gov/api/map_key/
+
+    Key lookup priority:
+      1. Explicit ``map_key`` argument
+      2. :class:`edge_triage.secrets_store.SecretsStore` (env var → local file)
     """
 
     name = "firms"
 
     def __init__(self, map_key: str | None = None, days: int = 1) -> None:
-        self.map_key = map_key or os.environ.get("EDGE_TRIAGE_FIRMS_KEY", "")
+        if map_key is not None and map_key.strip():
+            self.map_key = map_key.strip()
+        else:
+            # Defer import to avoid cyclic issues
+            from .secrets_store import secrets as _secrets
+            self.map_key = _secrets.get("firms")
         self.days = max(1, min(days, 10))
 
     def fetch(self, bbox: tuple[float, float, float, float]) -> list[LiveFeedItem]:

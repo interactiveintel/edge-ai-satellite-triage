@@ -978,3 +978,110 @@ class TestLiveDataSources:
                                               "scene_id": item.name})
         assert 0.0 <= r.final_score <= 1.0
         assert isinstance(r.keep, bool)
+
+
+# ── Secrets store ───────────────────────────────────────────────────────────
+
+
+class TestSecretsStore:
+    """SecretsStore — local JSON-backed secret persistence with env fallback."""
+
+    def test_get_returns_empty_when_nothing_set(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        assert store.get("firms") == ""
+        assert store.source("firms") == "unset"
+
+    def test_env_var_takes_priority_over_file(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        store.set("firms", "FILE_KEY")
+        assert store.get("firms") == "FILE_KEY"
+        monkeypatch.setenv("EDGE_TRIAGE_FIRMS_KEY", "ENV_KEY")
+        assert store.get("firms") == "ENV_KEY"
+        assert store.source("firms") == "env"
+
+    def test_set_get_roundtrip(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        store.set("firms", "my_test_key_abc123")
+        assert store.get("firms") == "my_test_key_abc123"
+        assert store.source("firms") == "file"
+        assert store.path.exists()
+
+    def test_set_empty_value_deletes(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        store.set("firms", "some_key")
+        assert store.get("firms") == "some_key"
+        store.set("firms", "")
+        assert store.get("firms") == ""
+
+    def test_delete_removes_key(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        store.set("firms", "some_key")
+        store.delete("firms")
+        assert store.get("firms") == ""
+
+    def test_file_permissions_hardened(self, tmp_path, monkeypatch) -> None:
+        """On POSIX, the secrets file should have 0600 permissions."""
+        import os
+        import stat
+        import sys
+        if sys.platform.startswith("win"):
+            pytest.skip("POSIX permissions only")
+
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        store.set("firms", "my_key")
+        mode = stat.S_IMODE(os.stat(store.path).st_mode)
+        # Only owner read/write (0o600)
+        assert mode == 0o600, f"Expected 0600, got {oct(mode)}"
+
+    def test_redacts_for_logging(self) -> None:
+        from edge_triage.secrets_store import _redact
+        assert _redact("abcdef1234") == "abc…34"
+        assert _redact("abc") == "***"
+        assert _redact("") == "<empty>"
+
+    def test_all_status_snapshot(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        store = SecretsStore(path=tmp_path / "secrets.json")
+        status = store.all_status()
+        assert "firms" in status
+        assert status["firms"]["set"] is False
+        store.set("firms", "abc123xyz")
+        status = store.all_status()
+        assert status["firms"]["set"] is True
+        assert status["firms"]["source"] == "file"
+        # Redacted must NOT contain the full key
+        assert "abc123xyz" not in status["firms"]["redacted"]
+
+    def test_firms_source_consults_secrets_store(self, tmp_path, monkeypatch) -> None:
+        """FIRMSFireSource should pick up a key saved in SecretsStore."""
+        from edge_triage import secrets_store
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        # Point the module-level singleton at a temp file
+        monkeypatch.setattr(secrets_store, "secrets",
+                            secrets_store.SecretsStore(path=tmp_path / "secrets.json"))
+        secrets_store.secrets.set("firms", "TEST_MAP_KEY")
+
+        from edge_triage.live_data import FIRMSFireSource
+        src = FIRMSFireSource()  # no explicit key
+        assert src.map_key == "TEST_MAP_KEY"
+
+    def test_malformed_file_does_not_crash(self, tmp_path, monkeypatch) -> None:
+        from edge_triage.secrets_store import SecretsStore
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        path = tmp_path / "secrets.json"
+        path.write_text("{this is not valid json", encoding="utf-8")
+        store = SecretsStore(path=path)
+        # Should return empty string, not raise
+        assert store.get("firms") == ""

@@ -46,14 +46,20 @@ class ReActResult:
 
 
 def _tool_assess_urgency(cnn: dict[str, Any], meta: dict[str, Any]) -> str:
-    """Heuristic urgency assessment from CNN scores + metadata context."""
+    """Heuristic urgency assessment from CNN scores + detections + context."""
     value = cnn.get("value_score", 0.0)
     anomaly = cnn.get("anomaly_score", 0.0)
+    det_count = int(cnn.get("detection_count", meta.get("detection_count", 0)))
+    det_summary = cnn.get("detection_summary", meta.get("detection_summary", ""))
     context = meta.get("context", "").lower()
 
     urgency_keywords = {"wildfire", "fire", "flood", "earthquake", "oil spill", "disaster", "defense"}
     context_boost = any(kw in context for kw in urgency_keywords)
 
+    if det_count >= 3:
+        return f"HIGH urgency — {det_summary}, context_match={context_boost}"
+    if det_count >= 1:
+        return f"MEDIUM-HIGH urgency — {det_summary}"
     if anomaly > 0.7 or context_boost:
         return f"HIGH urgency — anomaly={anomaly:.2f}, context_match={context_boost}"
     if value > 0.5:
@@ -75,7 +81,11 @@ def _tool_generate_explanation(steps: list[AgentStep], keep: bool) -> str:
 
 
 def _tool_suggest_followup(cnn: dict[str, Any], meta: dict[str, Any]) -> str:
-    """Suggest swarm / follow-up actions when a high-value tile is detected."""
+    """Suggest swarm / follow-up actions based on detections or anomaly."""
+    det_count = int(cnn.get("detection_count", meta.get("detection_count", 0)))
+    det_summary = cnn.get("detection_summary", meta.get("detection_summary", ""))
+    if det_count >= 2:
+        return f"TRIGGER follow-up imaging on nearest constellation member — {det_summary}"
     if cnn.get("anomaly_score", 0) > 0.6:
         return "TRIGGER follow-up imaging on nearest constellation member"
     return "No follow-up needed"
@@ -115,10 +125,13 @@ class ReActReasoningLoop:
 
             # ── Step 1: Assess urgency ──────────────────────────
             t_step = time.perf_counter()
+            det_count = int(cnn_results.get("detection_count", metadata.get("detection_count", 0)))
+            det_summary = cnn_results.get("detection_summary", metadata.get("detection_summary", ""))
+            det_note = f", items={det_summary}" if det_count > 0 else ""
             thought = (
                 f"Assess tile urgency — cloud={cnn_results.get('cloud_fraction', 0):.2f}, "
                 f"anomaly={cnn_results.get('anomaly_score', 0):.2f}, "
-                f"value={cnn_results.get('value_score', 0):.2f}"
+                f"value={cnn_results.get('value_score', 0):.2f}{det_note}"
             )
             observation = _tool_assess_urgency(cnn_results, metadata)
             steps.append(AgentStep(
@@ -141,6 +154,11 @@ class ReActReasoningLoop:
             # Boost for high-urgency context
             if "HIGH" in observation:
                 agent_score = min(agent_score * 1.3, 1.0)
+
+            # Detections directly elevate the score — items of interest are the
+            # strongest positive signal we have on a tile
+            if det_count > 0:
+                agent_score = min(agent_score + 0.15 * min(det_count, 5), 1.0)
 
             keep = agent_score > config.KEEP_SCORE_THRESHOLD and cloud < config.MAX_CLOUD_FRACTION
 

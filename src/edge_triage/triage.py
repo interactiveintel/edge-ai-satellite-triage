@@ -19,6 +19,7 @@ from .agent import AgentDecision, EdgeAgent
 from .audit import AuditLogger
 from .config import config
 from .data_ingest import ImageIngestor
+from .detection import DetectionResult, ObjectDetector
 from .inference import QuantizedInferencer
 from .utils import AgentPowerGuard, PowerMonitor
 
@@ -52,6 +53,9 @@ class TriageResult:
     # CNN layer
     cnn_results: dict[str, Any]
 
+    # Detection layer
+    detection_result: DetectionResult | None = None
+
     # Agent layer
     agent_decision: AgentDecision | None = None
     explanation: str = ""
@@ -81,6 +85,9 @@ class EdgeTriageEngine:
     def __init__(self, audit: bool | None = None) -> None:
         self.ingestor = ImageIngestor()
         self.inferencer = QuantizedInferencer()
+        self.detector: ObjectDetector | None = (
+            ObjectDetector() if config.DETECTION_ENABLED else None
+        )
         self.agent = EdgeAgent() if config.AGENT_ENABLED else None
         self.power_monitor = PowerMonitor()
         self.power_guard = AgentPowerGuard()
@@ -132,20 +139,48 @@ class EdgeTriageEngine:
             logger.error("Tile %s inference failed: %s", tile_id, exc)
             return self._error_result(tile_id, ts_utc, metadata, f"inference: {exc}")
 
-        # ── 3. Agentic reasoning ────────────────────────────────
+        # ── 3. Object detection (items of interest) ─────────────
+        detection_result: DetectionResult | None = None
+        cloud_frac = cnn_results.get("cloud_fraction", 0.0)
+        if (
+            self.detector
+            and not timed_out
+            and cloud_frac < config.MAX_CLOUD_FRACTION
+        ):
+            try:
+                detection_result = self.detector.detect(tile)
+                logger.debug(
+                    "Tile %s: %d detection(s) — %s",
+                    tile_id, detection_result.count, detection_result.summary(),
+                )
+            except Exception as exc:
+                logger.warning("Tile %s detection failed: %s", tile_id, exc)
+
+        # Enrich metadata with detection summary so the agent can reason about it
+        if detection_result is not None:
+            metadata = {**metadata, "detection_summary": detection_result.summary(),
+                        "detection_count": detection_result.count,
+                        "detection_classes": detection_result.classes_present}
+
+        # ── 4. Agentic reasoning ────────────────────────────────
         agent_decision: AgentDecision | None = None
+        # Activate agent on high-value tiles OR tiles with any detection
+        agent_trigger = (
+            cnn_results.get("value_score", 0) > config.AGENT_ACTIVATION_THRESHOLD
+            or (detection_result is not None and detection_result.count > 0)
+        )
         with self.power_guard.enforce_budget(max_watts=config.POWER_BUDGET_WATTS):
-            if (
-                self.agent
-                and not timed_out
-                and cnn_results.get("value_score", 0) > config.AGENT_ACTIVATION_THRESHOLD
-            ):
+            if self.agent and not timed_out and agent_trigger:
                 try:
-                    agent_decision = self.agent.reason_and_decide(cnn_results, metadata)
+                    # Also feed detections into cnn_results so the agent sees them
+                    enriched_cnn = {**cnn_results,
+                                    "detection_count": metadata.get("detection_count", 0),
+                                    "detection_summary": metadata.get("detection_summary", "")}
+                    agent_decision = self.agent.reason_and_decide(enriched_cnn, metadata)
                 except Exception as exc:
                     logger.warning("Tile %s agent failed: %s — falling back to CNN", tile_id, exc)
 
-        # ── 4. Combine into final decision ──────────────────────
+        # ── 5. Combine into final decision ──────────────────────
         if agent_decision:
             final_keep = agent_decision.keep
             final_score = agent_decision.final_score
@@ -158,13 +193,26 @@ class EdgeTriageEngine:
             explanation = "CNN-only decision (agent disabled or low-value tile)"
             actions = []
 
+        # ── 5b. Detection-based score boost + override ──────────
+        # Tiles with confirmed items of interest are upgraded to KEEP
+        if detection_result is not None and detection_result.count > 0:
+            final_score = min(1.0, final_score + config.DETECTION_DECISION_BOOST)
+            if not final_keep and cloud_frac < config.MAX_CLOUD_FRACTION:
+                final_keep = True
+                det_note = f"Detection override: {detection_result.summary()}"
+                if explanation and "NaN/Inf" not in explanation:
+                    explanation = f"{explanation}\n{det_note}"
+                else:
+                    explanation = det_note
+                actions = [*actions, f"KEEP — items of interest ({detection_result.summary()})"]
+
         # Guard against NaN/Inf from bad sensor data — default to safe FILTER
         if not np.isfinite(final_score):
             final_score = 0.0
             final_keep = False
             explanation = "NaN/Inf detected in scores — filtering as safety measure"
 
-        # ── 5. Bandwidth + power ────────────────────────────────
+        # ── 6. Bandwidth + power ────────────────────────────────
         cloud = cnn_results.get("cloud_fraction", 0)
         bandwidth_saved = 95.0 if not final_keep else max(60.0, 85.0 - cloud * 30)
         power_used = self.power_monitor.get_avg_power()
@@ -175,6 +223,7 @@ class EdgeTriageEngine:
             bandwidth_saved_percent=bandwidth_saved,
             power_used_watts=power_used,
             cnn_results=cnn_results,
+            detection_result=detection_result,
             agent_decision=agent_decision,
             explanation=explanation,
             actions=actions,
@@ -185,18 +234,19 @@ class EdgeTriageEngine:
             inference_timed_out=timed_out,
         )
 
-        # ── 6. Audit log ───────────────────────────────────────
+        # ── 7. Audit log ───────────────────────────────────────
         if self._audit:
             try:
                 self._audit.log_decision(image.tobytes(), result, metadata)
             except Exception:
                 logger.warning("Audit write failed for tile %s", tile_id, exc_info=True)
 
+        det_summary = detection_result.summary() if detection_result else "n/a"
         logger.info(
-            "Triage %s: %s | score=%.3f | power=%.1fW | bw_saved=%.1f%% | backend=%s",
+            "Triage %s: %s | score=%.3f | power=%.1fW | bw_saved=%.1f%% | backend=%s | items=%s",
             tile_id, "KEEP" if final_keep else "FILTER",
             final_score, power_used, bandwidth_saved,
-            cnn_results.get("backend", "?"),
+            cnn_results.get("backend", "?"), det_summary,
         )
 
         return result

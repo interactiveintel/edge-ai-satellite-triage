@@ -16,6 +16,87 @@ import sys
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  HELPERS — tile preview and detection overlay
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def _tile_to_rgb_uint8(tile):
+    """Convert any tile shape to an HxWx3 uint8 RGB preview, or None if unsupported.
+
+    Handles (H,W), (H,W,C), and (C,H,W). Picks the Sentinel-2 true-colour
+    bands (B4,B3,B2) from 13-channel tiles.
+    """
+    import numpy as _np
+
+    from .config import config
+
+    arr = _np.asarray(tile)
+    if arr.ndim == 2:
+        arr = _np.stack([arr, arr, arr], axis=-1)
+    elif arr.ndim == 3 and arr.shape[0] in (1, 3, 4, 13) and arr.shape[0] <= arr.shape[-1]:
+        # (C, H, W) — transpose
+        arr = _np.transpose(arr, (1, 2, 0))
+
+    if arr.ndim != 3:
+        return None
+
+    # Collapse multi-spectral → 3 channels (true-colour bands)
+    if arr.shape[-1] > 3:
+        rgb_idx = [i for i in config.RGB_CHANNELS if i < arr.shape[-1]][:3]
+        if len(rgb_idx) < 3:
+            rgb_idx = list(range(3))
+        arr = arr[:, :, rgb_idx]
+    elif arr.shape[-1] == 1:
+        arr = _np.repeat(arr, 3, axis=-1)
+
+    # Normalize to [0, 1]
+    arr = arr.astype(_np.float32)
+    if _np.nanmax(arr) > 1.5:
+        arr = arr / 255.0
+    arr = _np.clip(_np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=0.0), 0, 1)
+
+    return (arr * 255).astype(_np.uint8)
+
+
+def _draw_bboxes(rgb_uint8, detections, color=(255, 40, 40), thickness=2):
+    """Draw bounding boxes + labels onto a uint8 RGB image. Returns modified array.
+
+    BBoxes are normalized [0,1] — scaled to image dimensions.
+    """
+    import numpy as _np
+
+    from PIL import Image as PILImage, ImageDraw, ImageFont
+
+    img = PILImage.fromarray(rgb_uint8).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    w, h = img.size
+
+    try:
+        font = ImageFont.load_default()
+    except Exception:
+        font = None
+
+    for d in detections:
+        x1 = int(d.bbox[0] * w)
+        y1 = int(d.bbox[1] * h)
+        x2 = int(d.bbox[2] * w)
+        y2 = int(d.bbox[3] * h)
+        for t in range(thickness):
+            draw.rectangle([x1 - t, y1 - t, x2 + t, y2 + t], outline=color)
+        label = f"{d.class_name} {d.confidence:.2f}"
+        # Label background
+        if font is not None:
+            try:
+                tb = draw.textbbox((x1, y1 - 12), label, font=font)
+                draw.rectangle(tb, fill=color)
+                draw.text((x1 + 2, y1 - 12), label, fill="white", font=font)
+            except Exception:
+                draw.text((x1 + 2, max(0, y1 - 12)), label, fill=color)
+
+    return _np.asarray(img)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  STREAMLIT DASHBOARD
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -168,6 +249,14 @@ def _run_streamlit_dashboard() -> None:
         config.AGENT_SLM_ENABLED = st.toggle(
             "SLM Enhancement", value=config.AGENT_SLM_ENABLED,
             help="Phi-3/Gemma SLM for deep analysis (Orin AGX/Thor only)",
+        )
+        config.DETECTION_ENABLED = st.toggle(
+            "Object Detection", value=config.DETECTION_ENABLED,
+            help="YOLOv8-nano onboard detection of items of interest",
+        )
+        config.DETECTION_CONFIDENCE_THRESHOLD = st.slider(
+            "Detection confidence", 0.05, 0.90, config.DETECTION_CONFIDENCE_THRESHOLD, 0.05,
+            help="Minimum confidence for a detection to be counted",
         )
 
         st.markdown("---")
@@ -361,12 +450,17 @@ def _run_streamlit_dashboard() -> None:
         if results:
             # ── Overall KPI row ────────────────────────────────────
             summary = st.session_state.collector.metrics.summary()
-            k1, k2, k3, k4, k5 = st.columns(5)
+            total_items = sum(
+                (r.detection_result.count if r.detection_result else 0)
+                for _, _, r in results
+            )
+            k1, k2, k3, k4, k5, k6 = st.columns(6)
             k1.metric("Tiles", summary["tiles_processed"])
             k2.metric("Keep Rate", f"{summary['keep_rate'] * 100:.0f}%")
-            k3.metric("BW Saved", f"{summary['bandwidth_saved_percent']:.1f}%")
-            k4.metric("Avg Power", f"{summary['avg_power_watts']:.1f} W")
-            k5.metric("Avg Latency", f"{summary['avg_inference_ms']:.1f} ms")
+            k3.metric("Items Detected", total_items)
+            k4.metric("BW Saved", f"{summary['bandwidth_saved_percent']:.1f}%")
+            k5.metric("Avg Power", f"{summary['avg_power_watts']:.1f} W")
+            k6.metric("Avg Latency", f"{summary['avg_inference_ms']:.1f} ms")
 
             st.markdown("---")
 
@@ -388,6 +482,10 @@ def _run_streamlit_dashboard() -> None:
                 group_kept = sum(1 for _, _, _, r in group if r.keep)
                 group_filtered = len(group) - group_kept
                 group_bw = np.mean([r.bandwidth_saved_percent for _, _, _, r in group])
+                group_items = sum(
+                    (r.detection_result.count if r.detection_result else 0)
+                    for _, _, _, r in group
+                )
 
                 scenario_colors = {
                     "Wildfire Detection": "#e65100",
@@ -413,6 +511,9 @@ def _run_streamlit_dashboard() -> None:
                             <span style="background: #b71c1c; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
                                 FILTER {group_filtered}
                             </span>
+                            <span style="background: #0d47a1; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
+                                &#9733; {group_items} items
+                            </span>
                             <span style="opacity: 0.8;">BW saved: {group_bw:.0f}%</span>
                         </div>
                     </div>
@@ -436,6 +537,15 @@ def _run_streamlit_dashboard() -> None:
                                 unsafe_allow_html=True,
                             )
                             st.caption(f"Score: {result.final_score:.3f}")
+                            # Items-of-interest chip
+                            if result.detection_result and result.detection_result.count > 0:
+                                st.markdown(
+                                    f'<div style="margin-top:4px; background:#0d47a1; color:#fff; '
+                                    f'padding:3px 10px; border-radius:12px; font-size:0.78rem; '
+                                    f'display:inline-block; font-weight:600;">'
+                                    f'&#9733; {result.detection_result.summary()}</div>',
+                                    unsafe_allow_html=True,
+                                )
 
                         with cols[1]:
                             cloud = result.cnn_results.get("cloud_fraction", 0)
@@ -490,12 +600,37 @@ def _run_streamlit_dashboard() -> None:
                             st.markdown("**Full explanation:**")
                             st.code(result.explanation, language=None)
 
-                            # Show tile thumbnail for RGB tiles
-                            if tile.ndim == 3 and tile.shape[-1] == 3:
+                            # ── Detection details ──────────────────
+                            det = result.detection_result
+                            if det and det.count > 0:
+                                st.markdown(f"**Items of interest ({det.count}):**")
+                                det_rows = []
+                                for d in det.detections:
+                                    det_rows.append({
+                                        "Class": d.class_name,
+                                        "Confidence": f"{d.confidence:.2%}",
+                                        "BBox (x1,y1,x2,y2)": f"({d.bbox[0]:.2f}, {d.bbox[1]:.2f}, {d.bbox[2]:.2f}, {d.bbox[3]:.2f})",
+                                    })
+                                import pandas as pd
+                                st.dataframe(
+                                    pd.DataFrame(det_rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                                st.caption(
+                                    f"Detection backend: `{det.backend}` | "
+                                    f"Inference: {det.inference_ms:.1f} ms"
+                                )
+
+                            # ── Tile thumbnail with bounding-box overlay ────
+                            thumb = _tile_to_rgb_uint8(tile)
+                            if thumb is not None:
+                                if det and det.count > 0:
+                                    thumb = _draw_bboxes(thumb, det.detections)
                                 st.image(
-                                    np.clip(tile, 0, 1),
-                                    caption=f"Input tile ({tile.shape[1]}x{tile.shape[0]})",
-                                    width=200,
+                                    thumb,
+                                    caption=f"Input tile with overlays ({thumb.shape[1]}x{thumb.shape[0]})",
+                                    width=280,
                                 )
 
                         st.markdown("</div>", unsafe_allow_html=True)

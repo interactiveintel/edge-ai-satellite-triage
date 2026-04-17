@@ -46,6 +46,12 @@ class TriageConfig:
     AGENT_SLM_ENABLED: bool = False   # True only on AGX Orin 64 GB / Thor
     SLM_MODEL_NAME: str = "microsoft/Phi-3-mini-4k-instruct"
 
+    # ── Object detection ────────────────────────────────────────
+    DETECTION_ENABLED: bool = True
+    DETECTION_CONFIDENCE_THRESHOLD: float = 0.25
+    DETECTION_MODEL: str = "yolov8n.onnx"
+    DETECTION_DECISION_BOOST: float = 0.25   # added to score when ≥1 detection
+
     # ── Dual-use mode ──────────────────────────────────────────
     MODE: str = "space"               # "space" | "ground"
 

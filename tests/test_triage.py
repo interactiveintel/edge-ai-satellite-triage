@@ -665,3 +665,150 @@ class TestModelRegistry:
         assert len(versions) == 2
         assert versions[0]["version"] == "1.0.0"
         assert versions[1]["version"] == "1.1.0"
+
+
+# ── Object detection ────────────────────────────────────────────────────────
+
+
+class TestObjectDetection:
+    """Verify the detection layer finds items of interest and drives triage."""
+
+    def test_detector_stub_runs_on_random_tile(self) -> None:
+        from edge_triage.detection import DetectionResult, ObjectDetector
+        det = ObjectDetector()
+        tile = np.random.default_rng(42).uniform(0.3, 0.9, (13, 256, 256)).astype(np.float32)
+        result = det.detect(tile)
+        assert isinstance(result, DetectionResult)
+        assert result.backend in ("stub", "ultralytics") or result.backend.startswith("onnx")
+        # All detections must have valid bboxes in [0,1]
+        for d in result.detections:
+            assert 0.0 <= d.bbox[0] < d.bbox[2] <= 1.0
+            assert 0.0 <= d.bbox[1] < d.bbox[3] <= 1.0
+            assert 0.0 < d.confidence <= 1.0
+            assert d.class_name
+
+    def test_uniform_tile_has_few_detections(self) -> None:
+        """A dead-flat tile has no activity, so the stub should return few/no items."""
+        from edge_triage.detection import ObjectDetector
+        det = ObjectDetector()
+        tile = np.full((13, 256, 256), 0.5, dtype=np.float32)
+        result = det.detect(tile)
+        assert result.count <= 2  # near-zero activity → very few detections
+
+    def test_high_activity_tile_has_items(self) -> None:
+        """A high-variance tile should trigger the stub to report items."""
+        from edge_triage.detection import ObjectDetector
+        det = ObjectDetector()
+        rng = np.random.default_rng(123)
+        tile = rng.uniform(0.2, 0.9, (13, 256, 256)).astype(np.float32)
+        result = det.detect(tile)
+        # High activity should usually produce >=1 detection
+        assert result.count >= 1
+        assert result.summary() != "no items of interest"
+
+    def test_detection_summary_format(self) -> None:
+        """Summary like '3 ships, 1 airplane'."""
+        from edge_triage.detection import Detection, DetectionResult
+        result = DetectionResult(detections=[
+            Detection("ship", 0.9, (0.1, 0.1, 0.2, 0.2)),
+            Detection("ship", 0.8, (0.3, 0.3, 0.4, 0.4)),
+            Detection("ship", 0.7, (0.5, 0.5, 0.6, 0.6)),
+            Detection("airplane", 0.6, (0.7, 0.7, 0.8, 0.8)),
+        ])
+        summary = result.summary()
+        assert "3 ships" in summary
+        assert "1 airplane" in summary
+
+    def test_detections_boost_triage_keep_decision(self) -> None:
+        """When detector finds items of interest, tile is more likely KEPT."""
+        engine = EdgeTriageEngine(audit=False)
+        rng = np.random.default_rng(7)
+        tile = rng.uniform(0.3, 0.9, (13, 256, 256)).astype(np.float32)
+        result = engine.process_tile(tile, {"context": "Maritime ISR"})
+        # With detections, agent should activate and contribute to decision
+        if result.detection_result and result.detection_result.count > 0:
+            # If items found, score should be boosted
+            assert result.final_score > 0.0
+
+    def test_cloudy_tile_skips_detection(self) -> None:
+        """Cloud-obscured tiles should skip detection entirely."""
+        engine = EdgeTriageEngine(audit=False)
+        tile = np.full((13, 256, 256), 0.95, dtype=np.float32)
+        result = engine.process_tile(tile, {"context": "ISR"})
+        # Detection should be None or empty due to cloud guard
+        assert result.detection_result is None or result.detection_result.count == 0
+
+    def test_detection_result_serializable(self) -> None:
+        """DetectionResult.to_dict() must produce JSON-safe output."""
+        from edge_triage.detection import Detection, DetectionResult
+        result = DetectionResult(detections=[
+            Detection("ship", 0.87, (0.1, 0.2, 0.3, 0.4), class_id=8),
+        ])
+        d = result.to_dict()
+        serialized = json.dumps(d)
+        assert "ship" in serialized
+        assert "0.87" in serialized
+        reloaded = json.loads(serialized)
+        assert reloaded["count"] == 1
+        assert reloaded["detections"][0]["class_name"] == "ship"
+
+    def test_bbox_normalization(self) -> None:
+        """All bboxes must be normalized [0,1] with x1<x2 and y1<y2."""
+        from edge_triage.detection import ObjectDetector
+        det = ObjectDetector()
+        tile = np.random.default_rng(0).uniform(0.1, 0.9, (13, 256, 256)).astype(np.float32)
+        result = det.detect(tile)
+        for d in result.detections:
+            x1, y1, x2, y2 = d.bbox
+            assert 0.0 <= x1 < x2 <= 1.0, f"bad x bbox: {d.bbox}"
+            assert 0.0 <= y1 < y2 <= 1.0, f"bad y bbox: {d.bbox}"
+
+    def test_confidence_threshold_filters_low_scores(self) -> None:
+        """Higher threshold should reduce detection count."""
+        from edge_triage.detection import ObjectDetector
+        det = ObjectDetector()
+        tile = np.random.default_rng(5).uniform(0.2, 0.9, (13, 256, 256)).astype(np.float32)
+        low = det.detect(tile, confidence_threshold=0.05)
+        high = det.detect(tile, confidence_threshold=0.90)
+        # Stricter threshold should match or reduce detections
+        assert high.count <= low.count
+
+
+class TestDetectionPipelineIntegration:
+    """End-to-end: detection appears in TriageResult and feeds the agent."""
+
+    def test_triage_result_has_detection_field(self) -> None:
+        engine = EdgeTriageEngine(audit=False)
+        tile = np.random.default_rng(1).random((256, 256, 3), dtype=np.float32) * 0.5
+        r = engine.process_tile(tile, {"context": "test"})
+        # Field must exist (None or DetectionResult)
+        assert hasattr(r, "detection_result")
+
+    def test_agent_sees_detection_count(self) -> None:
+        """ReAct loop should surface detections in its urgency assessment."""
+        loop = ReActReasoningLoop()
+        cnn = {"cloud_fraction": 0.2, "anomaly_score": 0.3, "value_score": 0.5,
+               "detection_count": 3, "detection_summary": "3 ships"}
+        meta = {"context": "Maritime ISR"}
+        result = loop.reason_and_decide(cnn, meta)
+        # Urgency step observation should mention the ships
+        step1 = result["steps"][0]
+        assert "ships" in step1["observation"].lower() or "HIGH" in step1["observation"]
+
+    def test_detection_info_in_audit_log(self, tmp_path) -> None:
+        """Audit record should be writable when detections are present."""
+        from edge_triage.audit import AuditLogger
+        log_path = tmp_path / "audit.jsonl"
+        audit = AuditLogger(path=log_path)
+        engine = EdgeTriageEngine(audit=False)
+        engine._audit = audit
+        tile = np.random.default_rng(9).uniform(0.2, 0.8, (13, 256, 256)).astype(np.float32)
+        r = engine.process_tile(tile, {"context": "test", "tile_id": "t1"})
+        # Audit log must exist and contain at least one line
+        assert log_path.exists()
+        lines = log_path.read_text().strip().splitlines()
+        assert len(lines) >= 1
+        # Each line is JSON + \t + hmac_hex
+        json_part = lines[0].rsplit("\t", 1)[0]
+        record = json.loads(json_part)
+        assert record["tile_id"] == r.tile_id

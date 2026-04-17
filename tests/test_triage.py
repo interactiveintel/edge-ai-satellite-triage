@@ -812,3 +812,169 @@ class TestDetectionPipelineIntegration:
         json_part = lines[0].rsplit("\t", 1)[0]
         record = json.loads(json_part)
         assert record["tile_id"] == r.tile_id
+
+
+# ── Live data ingestion ─────────────────────────────────────────────────────
+
+
+class TestLiveDataSources:
+    """Verify live data sources handle failure, parse STAC, and ingest cleanly.
+
+    All network I/O is mocked so the test suite works offline and in CI.
+    """
+
+    def test_aoi_presets_well_formed(self) -> None:
+        """Every AOI preset must be a valid (minlon, minlat, maxlon, maxlat)."""
+        from edge_triage.live_data import AOI_PRESETS
+        assert len(AOI_PRESETS) >= 3
+        for name, bbox in AOI_PRESETS.items():
+            assert len(bbox) == 4, f"{name}: bbox must have 4 elements"
+            minlon, minlat, maxlon, maxlat = bbox
+            assert -180 <= minlon < maxlon <= 180, f"{name}: bad longitude"
+            assert -90 <= minlat < maxlat <= 90, f"{name}: bad latitude"
+
+    def test_livefeeditem_dataclass(self) -> None:
+        from edge_triage.live_data import LiveFeedItem
+        arr = np.zeros((10, 10, 3), dtype=np.float32)
+        item = LiveFeedItem(
+            name="test", image=arr, source="sentinel-2",
+            acquired_utc="2026-04-17T00:00:00Z",
+        )
+        assert item.name == "test"
+        assert item.image.shape == (10, 10, 3)
+        assert item.cloud_cover_pct is None
+        assert item.extra == {}
+
+    def test_sentinel2_handles_network_failure_gracefully(self, monkeypatch) -> None:
+        """Network errors should return [] rather than crash."""
+        from edge_triage import live_data
+
+        def fail(*a, **kw):
+            raise ConnectionError("simulated")
+
+        monkeypatch.setattr(live_data, "_http_post_json", fail)
+        src = live_data.Sentinel2Source()
+        items = src.fetch((-120.0, 35.0, -118.0, 37.0))
+        assert items == []
+
+    def test_sentinel2_parses_stac_response(self, monkeypatch) -> None:
+        """Mock a minimal STAC response and verify we parse it into LiveFeedItem."""
+        from edge_triage import live_data
+        import io
+
+        # Fake STAC feature
+        fake_stac = {
+            "type": "FeatureCollection",
+            "features": [{
+                "id": "S2B_FAKE_TILE_20260417",
+                "bbox": [-120.0, 35.0, -119.0, 36.0],
+                "geometry": {"type": "Polygon", "coordinates": [[]]},
+                "properties": {
+                    "datetime": "2026-04-17T10:30:00.000Z",
+                    "eo:cloud_cover": 12.5,
+                    "platform": "sentinel-2b",
+                    "grid:code": "MGRS-10SFE",
+                },
+                "assets": {
+                    "thumbnail": {"href": "https://example.com/thumb.jpg"},
+                },
+            }],
+        }
+
+        # Fake a 4x4 RGB PNG
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.fromarray(
+            np.full((4, 4, 3), 128, dtype=np.uint8),
+        ).save(buf, format="PNG")
+        fake_png = buf.getvalue()
+
+        monkeypatch.setattr(live_data, "_http_post_json", lambda *a, **k: fake_stac)
+        monkeypatch.setattr(live_data, "_http_get", lambda *a, **k: fake_png)
+
+        src = live_data.Sentinel2Source(limit=1)
+        items = src.fetch((-120.0, 35.0, -119.0, 36.0))
+
+        assert len(items) == 1
+        item = items[0]
+        assert item.source == "sentinel-2"
+        assert item.cloud_cover_pct == 12.5
+        assert item.scene_id == "S2B_FAKE_TILE_20260417"
+        assert item.image.shape == (4, 4, 3)
+        assert item.image.dtype == np.float32
+        assert 0.0 <= item.image.max() <= 1.0
+
+    def test_goes_handles_network_failure(self, monkeypatch) -> None:
+        from edge_triage import live_data
+
+        def fail(*a, **kw):
+            raise ConnectionError("simulated")
+
+        monkeypatch.setattr(live_data, "_http_get", fail)
+        src = live_data.NOAAGOESSource()
+        items = src.fetch("CONUS")
+        assert items == []
+
+    def test_goes_parses_image(self, monkeypatch) -> None:
+        from edge_triage import live_data
+        import io
+
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.fromarray(
+            np.full((32, 32, 3), 200, dtype=np.uint8),
+        ).save(buf, format="JPEG")
+        fake_jpeg = buf.getvalue()
+
+        monkeypatch.setattr(live_data, "_http_get", lambda *a, **k: fake_jpeg)
+        src = live_data.NOAAGOESSource()
+        items = src.fetch("CA")
+        assert len(items) == 1
+        assert items[0].source == "goes-18"
+        assert items[0].image.shape == (32, 32, 3)
+
+    def test_firms_requires_api_key(self, monkeypatch) -> None:
+        """Without a MAP_KEY, FIRMS should return [] and not try to fetch."""
+        from edge_triage import live_data
+
+        # Ensure no key is set
+        monkeypatch.delenv("EDGE_TRIAGE_FIRMS_KEY", raising=False)
+        src = live_data.FIRMSFireSource(map_key="")
+        items = src.fetch((-120.0, 35.0, -118.0, 37.0))
+        assert items == []
+
+    def test_firms_parses_csv(self, monkeypatch) -> None:
+        """Mock a FIRMS CSV response and verify it rasterizes into a heatmap."""
+        from edge_triage import live_data
+
+        fake_csv = (
+            "country_id,latitude,longitude,bright_ti4,scan,track,acq_date,acq_time,"
+            "satellite,instrument,confidence,version,bright_ti5,frp,daynight\n"
+            "USA,36.5,-119.5,320.1,0.5,0.5,2026-04-17,1830,N,VIIRS,high,2.0,290.0,18.5,D\n"
+            "USA,36.7,-119.2,310.5,0.5,0.5,2026-04-17,1830,N,VIIRS,high,2.0,285.0,25.0,D\n"
+        ).encode("utf-8")
+
+        monkeypatch.setattr(live_data, "_http_get", lambda *a, **k: fake_csv)
+        src = live_data.FIRMSFireSource(map_key="FAKE_KEY", days=1)
+        items = src.fetch((-120.0, 36.0, -119.0, 37.0))
+        assert len(items) == 1
+        assert items[0].source == "firms"
+        assert items[0].extra["fire_count"] == 2
+        # Heatmap should have non-zero pixels in the red channel
+        assert items[0].image[..., 0].max() > 0.0
+
+    def test_live_item_feeds_triage_pipeline(self) -> None:
+        """A LiveFeedItem image should be directly processable by the engine."""
+        from edge_triage.live_data import LiveFeedItem
+
+        arr = np.random.default_rng(5).uniform(0.2, 0.8, (64, 64, 3)).astype(np.float32)
+        item = LiveFeedItem(
+            name="test-live", image=arr, source="sentinel-2",
+            acquired_utc="2026-04-17T00:00:00Z", cloud_cover_pct=20.0,
+        )
+        engine = EdgeTriageEngine(audit=False)
+        r = engine.process_tile(item.image, {"context": "Live test",
+                                              "tile_id": item.name,
+                                              "scene_id": item.name})
+        assert 0.0 <= r.final_score <= 1.0
+        assert isinstance(r.keep, bool)

@@ -301,8 +301,8 @@ def _run_streamlit_dashboard() -> None:
         """, unsafe_allow_html=True)
 
     # ── Main tabs ──────────────────────────────────────────────
-    tab_triage, tab_analytics, tab_audit, tab_system = st.tabs([
-        "Triage Pipeline", "Analytics", "Audit Trail", "System Status",
+    tab_triage, tab_live, tab_analytics, tab_audit, tab_system = st.tabs([
+        "Triage Pipeline", "Live Feed", "Analytics", "Audit Trail", "System Status",
     ])
 
     # ════════════════════════════════════════════════════════════
@@ -636,7 +636,173 @@ def _run_streamlit_dashboard() -> None:
                         st.markdown("</div>", unsafe_allow_html=True)
 
     # ════════════════════════════════════════════════════════════
-    #  TAB 2: ANALYTICS
+    #  TAB 2: LIVE FEED — real satellite data
+    # ════════════════════════════════════════════════════════════
+    with tab_live:
+        from .live_data import (
+            AOI_PRESETS, GOES_SECTOR_PRESETS, SOURCES,
+            FIRMSFireSource, NOAAGOESSource, Sentinel2Source,
+        )
+
+        st.markdown("### Live Satellite Feed")
+        st.caption(
+            "Pulls real imagery from public APIs. No authentication required for "
+            "Sentinel-2 or NOAA GOES. FIRMS needs a free MAP_KEY via the "
+            "`EDGE_TRIAGE_FIRMS_KEY` env var."
+        )
+
+        live_col1, live_col2 = st.columns([1, 2])
+
+        with live_col1:
+            source_name = st.selectbox(
+                "Data source",
+                list(SOURCES.keys()),
+                help=(
+                    "Sentinel-2: global 10 m, ~2-5 day latency. "
+                    "GOES-18: Americas, ~10 min latency. "
+                    "FIRMS: global fires, ~3 h latency."
+                ),
+            )
+
+            if source_name.startswith("Sentinel-2"):
+                aoi_name = st.selectbox("Area of Interest", list(AOI_PRESETS.keys()))
+                max_cloud = st.slider("Max cloud cover (%)", 0, 100, 40, 5)
+                max_age = st.slider("Max age (days)", 1, 60, 14, 1)
+                max_items = st.slider("Max scenes", 1, 12, 6, 1)
+            elif source_name.startswith("NOAA GOES"):
+                sector_name = st.selectbox("GOES sector", list(GOES_SECTOR_PRESETS.keys()))
+            else:  # FIRMS
+                aoi_name = st.selectbox("Area of Interest", list(AOI_PRESETS.keys()))
+                firms_days = st.slider("Days of fires", 1, 10, 1, 1)
+
+            fetch_clicked = st.button("Fetch & Triage", type="primary", use_container_width=True)
+
+        with live_col2:
+            if fetch_clicked:
+                engine = EdgeTriageEngine(audit=False)
+
+                with st.spinner(f"Fetching from {source_name}..."):
+                    if source_name.startswith("Sentinel-2"):
+                        src = Sentinel2Source(
+                            max_cloud_cover=float(max_cloud),
+                            max_age_days=int(max_age),
+                            limit=int(max_items),
+                        )
+                        items = src.fetch(AOI_PRESETS[aoi_name])
+                    elif source_name.startswith("NOAA GOES"):
+                        gsrc = NOAAGOESSource()
+                        items = gsrc.fetch(GOES_SECTOR_PRESETS[sector_name])
+                    else:
+                        fsrc = FIRMSFireSource(days=int(firms_days))
+                        items = fsrc.fetch(AOI_PRESETS[aoi_name])
+
+                if not items:
+                    st.warning(
+                        "No scenes returned. Possible causes: no recent imagery for this AOI, "
+                        "network issue, or (for FIRMS) missing `EDGE_TRIAGE_FIRMS_KEY`."
+                    )
+                else:
+                    st.success(f"Fetched {len(items)} scene(s) — running triage pipeline...")
+
+                    live_results = []
+                    progress = st.progress(0)
+                    for i, item in enumerate(items):
+                        progress.progress((i + 1) / len(items), text=f"Triaging {item.name}...")
+                        meta = {
+                            "context": mission_context,
+                            "tile_id": item.scene_id or f"live_{i}",
+                            "scene_id": item.scene_id,
+                            "acquisition_time": item.acquired_utc,
+                        }
+                        result = engine.process_tile(item.image, meta)
+                        st.session_state.collector.record(item.image, result)
+                        live_results.append((item, result))
+                        st.session_state.results.append(
+                            (f"[LIVE] {item.name}", item.image, result),
+                        )
+                        st.session_state.processing_log.append({
+                            "time": time.strftime("%H:%M:%S"),
+                            "tile": item.name,
+                            "scenario": item.source,
+                            "decision": "KEEP" if result.keep else "FILTER",
+                            "score": round(result.final_score, 3),
+                        })
+
+                    progress.empty()
+
+                    # Render live results
+                    for item, r in live_results:
+                        decision_class = "keep" if r.keep else "filter"
+                        decision_badge = "decision-keep" if r.keep else "decision-filter"
+                        decision_text = "KEEP" if r.keep else "FILTER"
+
+                        st.markdown(f'<div class="tile-card {decision_class}" style="margin: 0.8rem 0;">', unsafe_allow_html=True)
+                        hcols = st.columns([1.5, 1, 1.5])
+
+                        with hcols[0]:
+                            st.markdown(f"**{item.name}**")
+                            st.caption(
+                                f"Source: `{item.source}` | "
+                                f"Acquired: {item.acquired_utc[:19]} | "
+                                f"Cloud: {(item.cloud_cover_pct or 0):.0f}%"
+                            )
+                            st.markdown(
+                                f'<span class="{decision_badge}">{decision_text}</span>',
+                                unsafe_allow_html=True,
+                            )
+                            st.caption(f"Score: {r.final_score:.3f}")
+                            if r.detection_result and r.detection_result.count > 0:
+                                st.markdown(
+                                    f'<div style="margin-top:4px; background:#0d47a1; color:#fff; '
+                                    f'padding:3px 10px; border-radius:12px; font-size:0.78rem; '
+                                    f'display:inline-block; font-weight:600;">'
+                                    f'&#9733; {r.detection_result.summary()}</div>',
+                                    unsafe_allow_html=True,
+                                )
+
+                        with hcols[1]:
+                            # Thumbnail with bbox overlay
+                            thumb = _tile_to_rgb_uint8(item.image)
+                            if thumb is not None:
+                                if r.detection_result and r.detection_result.count > 0:
+                                    thumb = _draw_bboxes(thumb, r.detection_result.detections)
+                                st.image(thumb, width=220)
+
+                        with hcols[2]:
+                            st.markdown("**Triage Result**")
+                            cnn = r.cnn_results
+                            st.caption(
+                                f"Cloud: {cnn.get('cloud_fraction', 0):.1%} | "
+                                f"Anomaly: {cnn.get('anomaly_score', 0):.1%} | "
+                                f"Value: {cnn.get('value_score', 0):.1%}"
+                            )
+                            st.caption(f"Backend: `{cnn.get('backend', '?')}` | "
+                                       f"BW saved: {r.bandwidth_saved_percent:.1f}%")
+                            if item.preview_url:
+                                st.caption(f"[Source preview]({item.preview_url})")
+                            if r.explanation:
+                                with st.expander("Agent explanation"):
+                                    st.code(r.explanation, language=None)
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                st.info(
+                    "Pick a data source and AOI in the left panel, then click **Fetch & Triage** "
+                    "to pull real imagery and run it through the edge AI pipeline."
+                )
+                st.markdown("""
+                **What each source provides:**
+                - **Sentinel-2 L2A** — Global 10 m multispectral imagery via Element84's free
+                  Earth Search STAC API. Typical latency 2-5 days. Best for land / change detection.
+                - **NOAA GOES-18** — Geostationary weather imagery over the Americas, updated
+                  every ~10 minutes. Best for near-real-time fire smoke plumes, storm tracking.
+                - **NASA FIRMS** — Active fire hotspot detections from VIIRS/MODIS, ~3 h latency.
+                  Requires a free MAP_KEY from firms.modaps.eosdis.nasa.gov — set in
+                  `EDGE_TRIAGE_FIRMS_KEY` environment variable.
+                """)
+
+    # ════════════════════════════════════════════════════════════
+    #  TAB 3: ANALYTICS
     # ════════════════════════════════════════════════════════════
     with tab_analytics:
         results = st.session_state.results

@@ -7,23 +7,35 @@ from .config import config
 from .data_ingest import ImageIngestor
 from .detection import Detection, DetectionResult, ObjectDetector
 from .inference import QuantizedInferencer
+from .live_data import (
+    AOI_PRESETS,
+    FIRMSFireSource,
+    LiveFeedItem,
+    NOAAGOESSource,
+    Sentinel2Source,
+)
 from .metrics import MetricsCollector
 from .model_registry import ModelRegistry
 from .triage import EdgeTriageEngine, TriageResult
 from .utils import PowerMonitor
 
 __all__ = [
+    "AOI_PRESETS",
     "AuditLogger",
     "config",
     "Detection",
     "DetectionResult",
     "EdgeTriageEngine",
+    "FIRMSFireSource",
     "ImageIngestor",
+    "LiveFeedItem",
     "MetricsCollector",
     "ModelRegistry",
+    "NOAAGOESSource",
     "ObjectDetector",
     "PowerMonitor",
     "QuantizedInferencer",
+    "Sentinel2Source",
     "TriageResult",
     "__version__",
 ]

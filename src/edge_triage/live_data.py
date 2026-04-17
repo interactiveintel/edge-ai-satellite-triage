@@ -122,6 +122,19 @@ def _decode_image(raw: bytes) -> np.ndarray:
 STAC_ENDPOINT = "https://earth-search.aws.element84.com/v1/search"
 
 
+def _s3_to_https(url: str) -> str:
+    """Convert an s3:// URL to a public HTTPS S3-website URL.
+
+    Sentinel-2 and Sentinel-1 quick-look PNGs live in public-read buckets
+    (``sentinel-cogs``, ``sentinel-s1-l1c``) that are also reachable over
+    plain HTTPS via the standard path-style URL.
+    """
+    if url.startswith("s3://"):
+        bucket, _, key = url[5:].partition("/")
+        return f"https://{bucket}.s3.amazonaws.com/{key}"
+    return url
+
+
 class Sentinel2Source:
     """Fetch recent Sentinel-2 L2A scenes from the free Element84 STAC API.
 
@@ -172,7 +185,7 @@ class Sentinel2Source:
                 continue
 
             try:
-                raw = _http_get(thumb["href"], timeout=15.0)
+                raw = _http_get(_s3_to_https(thumb["href"]), timeout=15.0)
                 arr = _decode_image(raw)
             except Exception as exc:
                 logger.warning("Failed to download thumbnail %s: %s", thumb["href"], exc)
@@ -205,6 +218,106 @@ class Sentinel2Source:
             ))
 
         logger.info("Sentinel-2 STAC: %d scenes fetched for bbox=%s", len(items), bbox)
+        return items
+
+
+# ── Sentinel-1 SAR (GRD) — the real maritime workhorse ────────────────────
+
+
+class Sentinel1Source:
+    """Fetch recent Sentinel-1 SAR GRD scenes from the Element84 STAC.
+
+    Why SAR for maritime surveillance:
+      - All-weather, day/night (cloud-penetrating)
+      - Ships appear as bright scatterers on dark water — classical detection
+        works without ML
+      - VV polarization is the defense/ISR standard for sea surface + vessels
+      - ~5-6 day revisit per orbit; Hormuz gets multiple passes/day from
+        different orbital geometries
+    """
+
+    name = "sentinel-1"
+
+    def __init__(
+        self,
+        max_age_days: int = 14,
+        limit: int = 6,
+        polarization: str = "VV",  # VV is best for ships on calm water
+    ) -> None:
+        self.max_age_days = max_age_days
+        self.limit = limit
+        self.polarization = polarization
+
+    def fetch(self, bbox: tuple[float, float, float, float]) -> list[LiveFeedItem]:
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=self.max_age_days)
+        datetime_range = f"{start.strftime('%Y-%m-%dT%H:%M:%SZ')}/{now.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+
+        payload = {
+            "collections": ["sentinel-1-grd"],
+            "bbox": list(bbox),
+            "datetime": datetime_range,
+            "limit": max(self.limit, 1),
+            "sortby": [{"field": "properties.datetime", "direction": "desc"}],
+            "query": {
+                "sar:product_type": {"eq": "GRD"},
+                "sar:polarizations": {"contains": self.polarization},
+            },
+        }
+
+        try:
+            response = _http_post_json(STAC_ENDPOINT, payload)
+        except Exception as exc:
+            logger.warning("Sentinel-1 STAC search failed: %s", exc)
+            return []
+
+        features = response.get("features", [])
+        items: list[LiveFeedItem] = []
+        for feat in features[: self.limit]:
+            props = feat.get("properties", {})
+            assets = feat.get("assets", {})
+            thumb = assets.get("thumbnail") or assets.get("preview")
+            if not thumb or "href" not in thumb:
+                continue
+
+            href = _s3_to_https(thumb["href"])
+            try:
+                raw = _http_get(href, timeout=20.0)
+                arr = _decode_image(raw)
+            except Exception as exc:
+                logger.warning("Failed to download SAR thumbnail %s: %s", href, exc)
+                continue
+
+            scene_bbox_raw = feat.get("bbox")
+            scene_bbox: tuple[float, float, float, float] | None = None
+            if scene_bbox_raw is not None and len(scene_bbox_raw) >= 4:
+                scene_bbox = (
+                    float(scene_bbox_raw[0]),
+                    float(scene_bbox_raw[1]),
+                    float(scene_bbox_raw[2]),
+                    float(scene_bbox_raw[3]),
+                )
+
+            items.append(LiveFeedItem(
+                name=f"S1 {props.get('datetime', '?')} — {feat.get('id', '?')}",
+                image=arr,
+                source=self.name,
+                acquired_utc=str(props.get("datetime", "")),
+                cloud_cover_pct=0.0,  # SAR is cloud-penetrating
+                bbox=scene_bbox,
+                scene_id=str(feat.get("id", "")),
+                preview_url=href,
+                extra={
+                    "platform": str(props.get("platform", "")),
+                    "polarizations": props.get("sar:polarizations", []),
+                    "orbit_state": str(props.get("sat:orbit_state", "")),
+                    "product_type": str(props.get("sar:product_type", "")),
+                    "resolution": props.get("s1:resolution", ""),
+                    "is_sar": True,
+                },
+            ))
+
+        logger.info("Sentinel-1 STAC: %d SAR scenes for bbox=%s", len(items), bbox)
         return items
 
 
@@ -391,7 +504,8 @@ class FIRMSFireSource:
 
 
 SOURCES = {
-    "Sentinel-2 L2A (Earth Search)": Sentinel2Source,
-    "NOAA GOES-18 (near-real-time)": NOAAGOESSource,
-    "NASA FIRMS (active fires)":      FIRMSFireSource,
+    "Sentinel-2 L2A (Earth Search)":     Sentinel2Source,
+    "Sentinel-1 SAR (maritime/all-weather)": Sentinel1Source,
+    "NOAA GOES-18 (near-real-time)":     NOAAGOESSource,
+    "NASA FIRMS (active fires)":         FIRMSFireSource,
 }

@@ -12,15 +12,23 @@ from .live_data import (
     FIRMSFireSource,
     LiveFeedItem,
     NOAAGOESSource,
+    Sentinel1Source,
     Sentinel2Source,
 )
 from .metrics import MetricsCollector
 from .model_registry import ModelRegistry
 from .secrets_store import SecretsStore, secrets
+from .ship_detector import (
+    AISCrossReference,
+    MaritimeShipDetector,
+    ShipDetection,
+    ShipDetectionResult,
+)
 from .triage import EdgeTriageEngine, TriageResult
 from .utils import PowerMonitor
 
 __all__ = [
+    "AISCrossReference",
     "AOI_PRESETS",
     "AuditLogger",
     "config",
@@ -30,6 +38,7 @@ __all__ = [
     "FIRMSFireSource",
     "ImageIngestor",
     "LiveFeedItem",
+    "MaritimeShipDetector",
     "MetricsCollector",
     "ModelRegistry",
     "NOAAGOESSource",
@@ -38,7 +47,10 @@ __all__ = [
     "QuantizedInferencer",
     "secrets",
     "SecretsStore",
+    "Sentinel1Source",
     "Sentinel2Source",
+    "ShipDetection",
+    "ShipDetectionResult",
     "TriageResult",
     "__version__",
 ]

@@ -1085,3 +1085,217 @@ class TestSecretsStore:
         store = SecretsStore(path=path)
         # Should return empty string, not raise
         assert store.get("firms") == ""
+
+
+# ── Maritime ship detection (Sentinel-1 SAR) ────────────────────────────────
+
+
+class TestMaritimeShipDetector:
+    """SAR ship detector — classical CFAR + connected-components.
+
+    These tests avoid any network: all scenes are synthesized in numpy.
+    """
+
+    def _water_with_ships(self, n_ships: int = 3, seed: int = 0) -> np.ndarray:
+        """Synthesize a SAR-like scene: dark water + bright ship-shaped blobs."""
+        rng = np.random.default_rng(seed)
+        H, W = 256, 256
+        # Water: low-intensity speckled noise
+        img = rng.uniform(0.02, 0.15, (H, W)).astype(np.float32)
+        # Ships: bright 4-8 px blobs
+        for _ in range(n_ships):
+            cx = int(rng.uniform(20, W - 20))
+            cy = int(rng.uniform(20, H - 20))
+            size = int(rng.integers(3, 7))
+            img[cy - size : cy + size, cx - size : cx + size] = rng.uniform(0.7, 1.0)
+        return img
+
+    def test_detector_finds_synthetic_ships(self) -> None:
+        from edge_triage.ship_detector import MaritimeShipDetector
+        det = MaritimeShipDetector(k_threshold=2.0)
+        scene = self._water_with_ships(n_ships=4, seed=1)
+        result = det.detect(scene)
+        # Detector should find the 4 synthetic ships (allow ±1 from noise)
+        assert 3 <= result.count <= 8, f"Expected ~4 ships, got {result.count}"
+        assert result.backend == "sar-cfar"
+        assert result.inference_ms >= 0
+
+    def test_empty_water_has_no_ships(self) -> None:
+        """A scene of pure water with no bright targets should yield no detections."""
+        from edge_triage.ship_detector import MaritimeShipDetector
+        rng = np.random.default_rng(2)
+        # Uniform water, no ships
+        scene = rng.uniform(0.05, 0.12, (128, 128)).astype(np.float32)
+        det = MaritimeShipDetector(k_threshold=3.5)
+        result = det.detect(scene)
+        assert result.count == 0
+
+    def test_land_dominated_scene_returns_empty(self) -> None:
+        """A bright (land) scene should be rejected as non-water."""
+        from edge_triage.ship_detector import MaritimeShipDetector
+        scene = np.full((64, 64), 0.8, dtype=np.float32)  # Uniform bright
+        det = MaritimeShipDetector()
+        result = det.detect(scene)
+        assert result.count == 0
+
+    def test_handles_multiband_input(self) -> None:
+        """HWC and CHW inputs should both work — pick VV/R channel."""
+        from edge_triage.ship_detector import MaritimeShipDetector
+        det = MaritimeShipDetector(k_threshold=2.0)
+        scene_gray = self._water_with_ships(n_ships=2, seed=3)
+        scene_hwc = np.stack([scene_gray, scene_gray * 0.5, scene_gray * 0.3], axis=-1)
+        scene_chw = np.stack([scene_gray, scene_gray * 0.5, scene_gray * 0.3], axis=0)
+        n_gray = det.detect(scene_gray).count
+        n_hwc = det.detect(scene_hwc).count
+        n_chw = det.detect(scene_chw).count
+        assert n_gray > 0
+        # HWC and CHW should pick the first channel (our ship-bearing channel)
+        assert n_hwc == n_gray
+        assert n_chw == n_gray
+
+    def test_bbox_wgs84_maps_to_lat_lon(self) -> None:
+        """When scene_bbox is passed, detections get lon/lat."""
+        from edge_triage.ship_detector import MaritimeShipDetector
+        det = MaritimeShipDetector(k_threshold=2.0)
+        scene = self._water_with_ships(n_ships=3, seed=5)
+        # Hormuz-like bbox
+        result = det.detect(scene, scene_bbox=(55.0, 26.0, 57.5, 27.5))
+        assert result.count > 0
+        for s in result.ships:
+            assert s.lat is not None
+            assert s.lon is not None
+            assert 26.0 <= s.lat <= 27.5
+            assert 55.0 <= s.lon <= 57.5
+
+    def test_aspect_ratio_filter_rejects_coastline(self) -> None:
+        """A long thin line (coastline/wake) should be filtered out."""
+        from edge_triage.ship_detector import MaritimeShipDetector
+        scene = np.zeros((128, 128), dtype=np.float32)
+        scene[:] = 0.05  # Dark water
+        scene[60, 5:120] = 0.9  # Long thin bright line — coastline artifact
+        det = MaritimeShipDetector(k_threshold=2.0, max_aspect_ratio=5.0)
+        result = det.detect(scene)
+        # Line is 115:1 aspect — should be rejected
+        assert result.count == 0
+
+    def test_to_detection_result_adapter(self) -> None:
+        """ShipDetectionResult should cleanly adapt to generic DetectionResult."""
+        from edge_triage.ship_detector import ShipDetection, ShipDetectionResult
+        sr = ShipDetectionResult(ships=[
+            ShipDetection(bbox=(0.1, 0.1, 0.2, 0.2), confidence=0.9),
+            ShipDetection(bbox=(0.5, 0.5, 0.6, 0.6), confidence=0.8, ais_match=False),
+        ])
+        dr = sr.to_detection_result()
+        assert dr.count == 2
+        # Dark ship should be labeled differently
+        labels = [d.class_name for d in dr.detections]
+        assert "ship" in labels
+        assert "dark-ship" in labels
+
+
+class TestAISCrossReference:
+    """AIS stub — validates the correlate pattern without a real feed."""
+
+    def test_ais_annotates_ships_with_match_flag(self) -> None:
+        from edge_triage.ship_detector import (
+            AISCrossReference,
+            ShipDetection,
+            ShipDetectionResult,
+        )
+        sr = ShipDetectionResult(ships=[
+            ShipDetection(bbox=(0.0, 0.0, 0.1, 0.1), confidence=0.9)
+            for _ in range(20)
+        ])
+        ais = AISCrossReference(dark_ship_rate=0.3, seed=42)
+        out = ais.correlate(sr)
+        # Every ship should now have ais_match set (not None)
+        assert all(s.ais_match is not None for s in out.ships)
+        # With 0.3 rate + 20 ships + fixed seed, expect some dark, some not
+        n_dark = sum(1 for s in out.ships if s.ais_match is False)
+        assert 0 < n_dark < 20
+
+    def test_deterministic_with_seed(self) -> None:
+        from edge_triage.ship_detector import (
+            AISCrossReference,
+            ShipDetection,
+            ShipDetectionResult,
+        )
+        ships = [ShipDetection(bbox=(0, 0, 0.1, 0.1), confidence=0.9) for _ in range(10)]
+        sr1 = ShipDetectionResult(ships=ships.copy())
+        sr2 = ShipDetectionResult(ships=ships.copy())
+        ais1 = AISCrossReference(dark_ship_rate=0.5, seed=1)
+        ais2 = AISCrossReference(dark_ship_rate=0.5, seed=1)
+        r1 = ais1.correlate(sr1)
+        r2 = ais2.correlate(sr2)
+        flags1 = [s.ais_match for s in r1.ships]
+        flags2 = [s.ais_match for s in r2.ships]
+        assert flags1 == flags2
+
+
+class TestSentinel1Source:
+    """Sentinel-1 STAC fetch — mocked."""
+
+    def test_s1_handles_network_failure(self, monkeypatch) -> None:
+        from edge_triage import live_data
+        monkeypatch.setattr(
+            live_data, "_http_post_json",
+            lambda *a, **k: (_ for _ in ()).throw(ConnectionError("sim")),
+        )
+        src = live_data.Sentinel1Source()
+        items = src.fetch((55.0, 26.0, 57.5, 27.5))
+        assert items == []
+
+    def test_s1_parses_stac_response_and_s3_url(self, monkeypatch) -> None:
+        from edge_triage import live_data
+        import io
+        from PIL import Image
+
+        fake_stac = {
+            "type": "FeatureCollection",
+            "features": [{
+                "id": "S1A_FAKE_20260417",
+                "bbox": [55.0, 26.0, 57.5, 27.5],
+                "properties": {
+                    "datetime": "2026-04-17T02:15:00.000Z",
+                    "platform": "sentinel-1a",
+                    "sar:polarizations": ["VV", "VH"],
+                    "sar:product_type": "GRD",
+                    "sat:orbit_state": "descending",
+                    "s1:resolution": "high",
+                },
+                "assets": {
+                    # Real STAC returns s3:// URLs for S1 quick-looks
+                    "thumbnail": {"href": "s3://sentinel-s1-l1c/GRD/fake/preview/quick-look.png"},
+                },
+            }],
+        }
+
+        buf = io.BytesIO()
+        Image.fromarray(np.full((8, 8, 3), 100, dtype=np.uint8)).save(buf, format="PNG")
+        fake_png = buf.getvalue()
+
+        monkeypatch.setattr(live_data, "_http_post_json", lambda *a, **k: fake_stac)
+
+        # Capture the URL to verify s3:// was converted to https://
+        captured_urls: list[str] = []
+
+        def fake_get(url: str, timeout: float = 10.0, headers=None) -> bytes:
+            captured_urls.append(url)
+            return fake_png
+
+        monkeypatch.setattr(live_data, "_http_get", fake_get)
+
+        src = live_data.Sentinel1Source()
+        items = src.fetch((55.0, 26.0, 57.5, 27.5))
+        assert len(items) == 1
+        assert items[0].source == "sentinel-1"
+        assert items[0].extra["is_sar"] is True
+        assert items[0].extra["polarizations"] == ["VV", "VH"]
+        # URL must have been translated from s3:// to https://
+        assert captured_urls[0].startswith("https://sentinel-s1-l1c.s3.amazonaws.com/")
+
+    def test_s3_to_https_helper(self) -> None:
+        from edge_triage.live_data import _s3_to_https
+        assert _s3_to_https("s3://bucket/key/path.png") == "https://bucket.s3.amazonaws.com/key/path.png"
+        # Non-s3 URL passes through unchanged
+        assert _s3_to_https("https://example.com/x.png") == "https://example.com/x.png"

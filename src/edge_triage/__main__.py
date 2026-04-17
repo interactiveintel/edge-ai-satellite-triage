@@ -641,9 +641,10 @@ def _run_streamlit_dashboard() -> None:
     with tab_live:
         from .live_data import (
             AOI_PRESETS, GOES_SECTOR_PRESETS, SOURCES,
-            FIRMSFireSource, NOAAGOESSource, Sentinel2Source,
+            FIRMSFireSource, NOAAGOESSource, Sentinel1Source, Sentinel2Source,
         )
         from .secrets_store import KNOWN_KEYS, secrets as _secrets_store
+        from .ship_detector import AISCrossReference, MaritimeShipDetector
 
         st.markdown("### Live Satellite Feed")
         st.caption(
@@ -746,6 +747,29 @@ def _run_streamlit_dashboard() -> None:
                 max_cloud = st.slider("Max cloud cover (%)", 0, 100, 40, 5)
                 max_age = st.slider("Max age (days)", 1, 60, 14, 1)
                 max_items = st.slider("Max scenes", 1, 12, 6, 1)
+            elif source_name.startswith("Sentinel-1"):
+                aoi_name = st.selectbox(
+                    "Area of Interest",
+                    list(AOI_PRESETS.keys()),
+                    index=list(AOI_PRESETS.keys()).index("Strait of Hormuz")
+                    if "Strait of Hormuz" in AOI_PRESETS else 0,
+                )
+                s1_max_age = st.slider("Max age (days)", 1, 30, 7, 1)
+                s1_max_items = st.slider("Max scenes", 1, 8, 4, 1)
+                polarization = st.selectbox(
+                    "Polarization",
+                    ["VV", "VH", "HH", "HV"],
+                    index=0,
+                    help="VV = best for ships on calm water (defense ISR standard)",
+                )
+                run_ship_detect = st.toggle(
+                    "Run SAR ship detection", value=True,
+                    help="Classical CFAR + connected-components vessel detector",
+                )
+                run_ais = st.toggle(
+                    "Simulate AIS cross-reference (flag dark ships)", value=True,
+                    help="Real AIS integration is a paid feed — this demos the pattern",
+                )
             elif source_name.startswith("NOAA GOES"):
                 sector_name = st.selectbox("GOES sector", list(GOES_SECTOR_PRESETS.keys()))
             else:  # FIRMS
@@ -758,6 +782,7 @@ def _run_streamlit_dashboard() -> None:
             if fetch_clicked:
                 engine = EdgeTriageEngine(audit=False)
 
+                ship_results: list[tuple[object, object]] = []  # (item, ShipDetectionResult)
                 with st.spinner(f"Fetching from {source_name}..."):
                     if source_name.startswith("Sentinel-2"):
                         src = Sentinel2Source(
@@ -766,6 +791,22 @@ def _run_streamlit_dashboard() -> None:
                             limit=int(max_items),
                         )
                         items = src.fetch(AOI_PRESETS[aoi_name])
+                    elif source_name.startswith("Sentinel-1"):
+                        s1src = Sentinel1Source(
+                            max_age_days=int(s1_max_age),
+                            limit=int(s1_max_items),
+                            polarization=polarization,
+                        )
+                        items = s1src.fetch(AOI_PRESETS[aoi_name])
+
+                        if run_ship_detect and items:
+                            detector = MaritimeShipDetector()
+                            ais = AISCrossReference(dark_ship_rate=0.25, seed=7) if run_ais else None
+                            for it in items:
+                                sr = detector.detect(it.image, scene_bbox=it.bbox)
+                                if ais is not None:
+                                    sr = ais.correlate(sr)
+                                ship_results.append((it, sr))
                     elif source_name.startswith("NOAA GOES"):
                         gsrc = NOAAGOESSource()
                         items = gsrc.fetch(GOES_SECTOR_PRESETS[sector_name])
@@ -788,6 +829,11 @@ def _run_streamlit_dashboard() -> None:
                 else:
                     st.success(f"Fetched {len(items)} scene(s) — running triage pipeline...")
 
+                    # Index ship results by scene_id for quick lookup
+                    ship_by_scene = {
+                        it.scene_id: sr for it, sr in ship_results
+                    } if ship_results else {}
+
                     live_results = []
                     progress = st.progress(0)
                     for i, item in enumerate(items):
@@ -798,9 +844,22 @@ def _run_streamlit_dashboard() -> None:
                             "scene_id": item.scene_id,
                             "acquisition_time": item.acquired_utc,
                         }
+                        # If we have SAR ship detection, inject it into metadata
+                        # so the agent reasons about ship counts specifically
+                        ship_result = ship_by_scene.get(item.scene_id)
+                        if ship_result is not None:
+                            meta["detection_count"] = ship_result.count
+                            meta["detection_summary"] = ship_result.summary()
+                            meta["detection_classes"] = (
+                                ["ship", "dark-ship"] if ship_result.dark_ship_count
+                                else ["ship"]
+                            )
                         result = engine.process_tile(item.image, meta)
                         st.session_state.collector.record(item.image, result)
-                        live_results.append((item, result))
+                        # Replace the generic detection_result with our ship result
+                        if ship_result is not None:
+                            result.detection_result = ship_result.to_detection_result()
+                        live_results.append((item, result, ship_result))
                         st.session_state.results.append(
                             (f"[LIVE] {item.name}", item.image, result),
                         )
@@ -815,7 +874,7 @@ def _run_streamlit_dashboard() -> None:
                     progress.empty()
 
                     # Render live results
-                    for item, r in live_results:
+                    for item, r, ship_result in live_results:
                         decision_class = "keep" if r.keep else "filter"
                         decision_badge = "decision-keep" if r.keep else "decision-filter"
                         decision_text = "KEEP" if r.keep else "FILTER"
@@ -868,6 +927,88 @@ def _run_streamlit_dashboard() -> None:
                                 with st.expander("Agent explanation"):
                                     st.code(r.explanation, language=None)
 
+                        # ── SAR Ship Detail Panel (only for Sentinel-1 scenes) ──
+                        if ship_result is not None and ship_result.count > 0:
+                            dark = ship_result.dark_ship_count
+                            dark_banner = (
+                                f'<span style="background:#7f0000; color:#fff; padding:3px 10px; '
+                                f'border-radius:4px; font-weight:700;">&#9888; {dark} DARK SHIPS</span>'
+                                if dark else ""
+                            )
+                            st.markdown(
+                                f'<div style="background:#0a2540; color:#fff; padding:0.6rem 1rem; '
+                                f'border-radius:6px; margin-top:0.4rem;">'
+                                f'<strong>Maritime ISR</strong> — {ship_result.count} vessel'
+                                f'{"s" if ship_result.count != 1 else ""} detected '
+                                f'in {ship_result.inference_ms:.0f} ms  &nbsp; {dark_banner}'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                            with st.expander(
+                                f"Vessel detection details — {ship_result.summary()}",
+                                expanded=bool(dark),
+                            ):
+                                import pandas as pd
+                                rows = []
+                                for j, s in enumerate(ship_result.ships, 1):
+                                    ais_str = (
+                                        "✓ AIS match" if s.ais_match
+                                        else "⚠ DARK (no AIS)" if s.ais_match is False
+                                        else "—"
+                                    )
+                                    rows.append({
+                                        "#": j,
+                                        "Lat": f"{s.lat:.3f}" if s.lat is not None else "—",
+                                        "Lon": f"{s.lon:.3f}" if s.lon is not None else "—",
+                                        "Est. length (m)": f"{s.length_m_est:.0f}",
+                                        "Confidence": f"{s.confidence:.2f}",
+                                        "Area (px)": s.area_pixels,
+                                        "Status": ais_str,
+                                    })
+                                st.dataframe(
+                                    pd.DataFrame(rows),
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+
+                                # Plot detections on a small map if coordinates exist
+                                map_rows = [
+                                    {"lat": s.lat, "lon": s.lon,
+                                     "color": [255, 60, 60] if s.ais_match is False else [60, 180, 255]}
+                                    for s in ship_result.ships
+                                    if s.lat is not None and s.lon is not None
+                                ]
+                                if map_rows:
+                                    import pandas as pd
+                                    map_df = pd.DataFrame(map_rows)
+                                    try:
+                                        import pydeck as pdk
+                                        layer = pdk.Layer(
+                                            "ScatterplotLayer",
+                                            data=map_df,
+                                            get_position="[lon, lat]",
+                                            get_fill_color="color",
+                                            get_radius=800,
+                                            pickable=True,
+                                        )
+                                        lat_c = float(map_df["lat"].mean())
+                                        lon_c = float(map_df["lon"].mean())
+                                        view = pdk.ViewState(
+                                            longitude=lon_c, latitude=lat_c,
+                                            zoom=7, pitch=0,
+                                        )
+                                        st.pydeck_chart(pdk.Deck(
+                                            layers=[layer],
+                                            initial_view_state=view,
+                                            map_style="light",
+                                        ))
+                                        st.caption("Blue = AIS match (known commercial traffic). "
+                                                   "Red = dark ship (no transponder) — high interest.")
+                                    except Exception:
+                                        # Fallback to st.map if pydeck isn't available
+                                        st.map(map_df[["lat", "lon"]])
+
                         st.markdown("</div>", unsafe_allow_html=True)
             else:
                 st.info(
@@ -876,13 +1017,16 @@ def _run_streamlit_dashboard() -> None:
                 )
                 st.markdown("""
                 **What each source provides:**
-                - **Sentinel-2 L2A** — Global 10 m multispectral imagery via Element84's free
-                  Earth Search STAC API. Typical latency 2-5 days. Best for land / change detection.
+                - **Sentinel-2 L2A** — Global 10 m optical multispectral imagery via Element84's
+                  free Earth Search STAC API. Latency 2-5 days. Best for land / change detection.
+                - **Sentinel-1 SAR** — Global all-weather radar (day/night, cloud-penetrating).
+                  Defense / maritime ISR standard. Ships appear as bright scatterers on dark
+                  water → classical CFAR detection. Paired with a simulated AIS overlay to
+                  flag **dark ships** (no transponder broadcast — the real intel signal).
                 - **NOAA GOES-18** — Geostationary weather imagery over the Americas, updated
                   every ~10 minutes. Best for near-real-time fire smoke plumes, storm tracking.
                 - **NASA FIRMS** — Active fire hotspot detections from VIIRS/MODIS, ~3 h latency.
-                  Requires a free MAP_KEY from firms.modaps.eosdis.nasa.gov — set in
-                  `EDGE_TRIAGE_FIRMS_KEY` environment variable.
+                  Requires a free MAP_KEY — use the setup panel above to add one.
                 """)
 
     # ════════════════════════════════════════════════════════════

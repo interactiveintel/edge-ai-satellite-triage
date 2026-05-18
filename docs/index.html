@@ -358,11 +358,211 @@
     footer a:hover { color: var(--accent-bright); }
     .footer-links { display: flex; gap: 1.5rem; }
 
+    /* ── DASHBOARD PREVIEW (CSS-rendered facsimile) ──────────── */
+    .preview-frame {
+      background: var(--bg-deep);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      padding: 0;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      overflow: hidden;
+      position: relative;
+      margin: 0 auto;
+      max-width: 1100px;
+    }
+    .preview-chrome {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 14px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+    }
+    .preview-chrome .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--border-strong); }
+    .preview-chrome .dot.r { background: #ff5f57; }
+    .preview-chrome .dot.y { background: #febc2e; }
+    .preview-chrome .dot.g { background: #28c840; }
+    .preview-chrome .url {
+      flex: 1; margin: 0 100px 0 12px;
+      background: var(--bg-deep);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 12px;
+      color: var(--text-secondary);
+      font-size: 0.75rem;
+      font-family: "SF Mono", "Menlo", monospace;
+    }
+    .preview-body {
+      padding: 1.2rem 1.4rem 1.6rem;
+      font-size: 0.85rem;
+    }
+
+    /* Replica of mission-control header */
+    .p-header {
+      background: linear-gradient(135deg, #0a0e1a 0%, #131c33 35%, #1a2944 70%, #1e3a5f 100%);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .p-header::before {
+      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent-bright) 25%, var(--success) 50%, var(--accent-bright) 75%, transparent);
+    }
+    .p-header-flex {
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .p-status-pill {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(0, 214, 143, 0.10);
+      color: var(--success);
+      border: 1px solid var(--success);
+      padding: 2px 9px;
+      border-radius: 3px;
+      font-size: 0.6rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .p-status-pill .dot {
+      width: 6px; height: 6px; background: var(--success); border-radius: 50%;
+      box-shadow: 0 0 6px var(--success); animation: pulse 2s infinite;
+    }
+    .p-title {
+      font-size: 1.05rem; font-weight: 800; color: #fff;
+      letter-spacing: 0.08em; margin: 6px 0 0;
+      text-transform: uppercase;
+    }
+    .p-title .accent { color: var(--accent-bright); }
+    .p-sub { color: var(--text-secondary); font-size: 0.7rem; margin: 4px 0 0; }
+    .p-stats { display: flex; gap: 1rem; }
+    .p-stat {
+      text-align: right; padding-left: 0.7rem;
+      border-left: 1px solid var(--border);
+      min-width: 60px;
+    }
+    .p-stat .v { font-family: "SF Mono", "Menlo", monospace; font-size: 0.85rem; font-weight: 700; color: #fff; }
+    .p-stat .l { font-size: 0.55rem; color: var(--text-muted); letter-spacing: 0.1em; text-transform: uppercase; margin-top: 2px; }
+
+    /* Tab strip */
+    .p-tabs {
+      display: flex; gap: 4px;
+      background: var(--bg-surface);
+      padding: 5px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin: 14px 0 12px;
+    }
+    .p-tab {
+      padding: 5px 12px;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      border-radius: 5px;
+      color: var(--text-secondary);
+    }
+    .p-tab.active { background: var(--accent); color: #fff; }
+
+    /* KPI row */
+    .p-kpi-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 14px; }
+    .p-kpi {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .p-kpi .l { font-size: 0.55rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: 600; }
+    .p-kpi .v { font-family: "SF Mono", "Menlo", monospace; font-size: 1.05rem; font-weight: 700; color: #fff; margin-top: 4px; }
+
+    /* Scenario banner */
+    .p-banner {
+      background: linear-gradient(90deg, rgba(255, 112, 67, 0.15) 0%, transparent 100%);
+      border-left: 3px solid #ff7043;
+      border-top: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin: 6px 0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .p-banner.maritime { background: linear-gradient(90deg, rgba(66, 165, 245, 0.15) 0%, transparent 100%); border-left-color: #42a5f5; }
+    .p-banner-title { font-size: 0.78rem; font-weight: 700; color: #fff; }
+    .p-banner-icon { font-size: 0.9rem; margin-right: 6px; }
+    .p-banner-icon.fire { color: #ff7043; }
+    .p-banner-icon.mar  { color: #42a5f5; }
+    .p-chips { display: flex; gap: 4px; font-family: "SF Mono", "Menlo", monospace; font-size: 0.6rem; font-weight: 700; }
+    .p-chip {
+      padding: 2px 7px; border-radius: 3px;
+      border: 1px solid; background: rgba(255,255,255,0.04);
+    }
+    .p-chip.keep   { color: var(--success); border-color: var(--success); }
+    .p-chip.filter { color: var(--danger);  border-color: var(--danger); }
+    .p-chip.items  { color: var(--accent-bright); border-color: var(--accent); }
+    .p-chip.bw     { color: var(--text-muted); border: none; }
+
+    /* Tile cards */
+    .p-tiles { margin-top: 8px; }
+    .p-tile {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin: 6px 0;
+      display: grid;
+      grid-template-columns: 1.5fr 1fr 1fr 1fr 2fr;
+      gap: 12px;
+      align-items: center;
+      position: relative;
+    }
+    .p-tile::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 8px 0 0 8px; }
+    .p-tile.keep::before   { background: var(--success); box-shadow: 0 0 12px var(--success); }
+    .p-tile.filter::before { background: var(--danger); }
+    .p-tile-name { font-weight: 600; color: #fff; font-size: 0.78rem; }
+    .p-tile-score { font-size: 0.65rem; color: var(--text-muted); font-family: "SF Mono", "Menlo", monospace; margin-top: 3px; }
+    .p-decision {
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      font-family: "SF Mono", "Menlo", monospace;
+      font-size: 0.62rem; font-weight: 700; letter-spacing: 0.12em;
+      border: 1px solid; margin-top: 3px;
+    }
+    .p-decision.keep   { background: rgba(0, 214, 143, 0.15); color: var(--success); border-color: var(--success); box-shadow: 0 0 10px rgba(0,214,143,0.2); }
+    .p-decision.filter { background: rgba(255, 82, 82, 0.10); color: var(--danger); border-color: var(--danger); }
+    .p-meter {
+      background: var(--bg-elevated); border-radius: 3px; height: 6px; overflow: hidden; margin-top: 5px;
+    }
+    .p-meter > i {
+      display: block; height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+      border-radius: 3px;
+    }
+    .p-meter-label { font-size: 0.6rem; color: var(--text-muted); }
+    .p-mini-chip {
+      display: inline-block; margin-top: 4px;
+      background: rgba(74, 144, 226, 0.12); color: var(--accent-bright);
+      border: 1px solid var(--accent); padding: 1px 8px; border-radius: 3px;
+      font-size: 0.6rem; font-weight: 600; font-family: "SF Mono", "Menlo", monospace;
+    }
+    .p-explain {
+      font-size: 0.66rem; color: var(--text-secondary); line-height: 1.4;
+    }
+    .p-explain b { color: var(--text-primary); font-weight: 600; }
+
+    /* Demo button bar above preview */
+    .preview-actions {
+      display: flex; justify-content: center; gap: 10px; margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
     /* ── RESPONSIVE ──────────────────────────────────────────── */
     @media (max-width: 720px) {
       .topnav a:not(.btn) { display: none; }
       section.block { padding: 3.5rem 20px; }
       .hero { padding: 3rem 20px 2.5rem; }
+      .p-kpi-row { grid-template-columns: repeat(3, 1fr); }
+      .p-tile { grid-template-columns: 1fr 1fr 1fr; font-size: 0.7rem; }
+      .p-tile > div:nth-child(5) { grid-column: 1 / -1; }
+      .p-stats { display: none; }
     }
   </style>
 </head>
@@ -373,6 +573,7 @@
     <div class="topbar-inner">
       <div class="logo">EDGE AI <span class="accent">SATELLITE TRIAGE</span></div>
       <nav class="topnav">
+        <a href="#preview">Preview</a>
         <a href="#features">Features</a>
         <a href="#pipeline">Pipeline</a>
         <a href="#usecases">Use Cases</a>
@@ -434,6 +635,198 @@
         <div class="stat-label">Production Modules</div>
       </div>
     </div>
+  </section>
+
+  <!-- DASHBOARD PREVIEW -->
+  <section id="preview" class="block" style="padding-top: 4rem;">
+    <div style="text-align:center; margin-bottom: 2.5rem;">
+      <div class="section-eyebrow">Dashboard Preview</div>
+      <h2 class="section-title" style="margin-bottom: 0.7rem;">What you'll see in the live demo</h2>
+      <p class="section-sub" style="margin: 0 auto 1.5rem;">
+        Real-time mission-control interface — pulls live Sentinel-1 SAR, Sentinel-2,
+        and NOAA GOES imagery. Runs ship detection, fire monitoring, and agentic
+        triage in your browser.
+      </p>
+      <div class="preview-actions">
+        <a href="https://interactiveintel-edge-ai-satellite-triage.streamlit.app/"
+           target="_blank" rel="noopener"
+           class="btn btn-primary">Launch Live Demo →</a>
+        <a href="https://github.com/interactiveintel/edge-ai-satellite-triage"
+           target="_blank" rel="noopener"
+           class="btn btn-ghost">View Source</a>
+      </div>
+    </div>
+
+    <div class="preview-frame">
+      <!-- Browser-chrome header -->
+      <div class="preview-chrome">
+        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+        <div class="url">interactiveintel-edge-ai-satellite-triage.streamlit.app</div>
+      </div>
+
+      <div class="preview-body">
+        <!-- Mission-control header replica -->
+        <div class="p-header">
+          <div class="p-header-flex">
+            <div>
+              <span class="p-status-pill"><span class="dot"></span>System Operational · Dual-Use ISR</span>
+              <div class="p-title">Edge AI <span class="accent">Satellite Triage</span></div>
+              <div class="p-sub">Onboard agentic filtering · Real-time SAR &amp; optical · NVIDIA Jetson Orin · Under 15 W</div>
+            </div>
+            <div class="p-stats">
+              <div class="p-stat"><div class="v">14:57</div><div class="l">UTC Time</div></div>
+              <div class="p-stat"><div class="v">15<span style="font-size:0.65rem; color:var(--text-muted);">W</span></div><div class="l">Power</div></div>
+              <div class="p-stat"><div class="v">24</div><div class="l">Tiles</div></div>
+              <div class="p-stat"><div class="v" style="color:var(--success);">●</div><div class="l">v0.1.0</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab strip -->
+        <div class="p-tabs">
+          <div class="p-tab">◆ Triage Pipeline</div>
+          <div class="p-tab active">◉ Live Feed</div>
+          <div class="p-tab">▤ Analytics</div>
+          <div class="p-tab">⛨ Audit Trail</div>
+          <div class="p-tab">◈ System Status</div>
+        </div>
+
+        <!-- KPI row -->
+        <div class="p-kpi-row">
+          <div class="p-kpi"><div class="l">Tiles</div><div class="v">24</div></div>
+          <div class="p-kpi"><div class="l">Keep Rate</div><div class="v">17%</div></div>
+          <div class="p-kpi"><div class="l">Items</div><div class="v">38</div></div>
+          <div class="p-kpi"><div class="l">BW Saved</div><div class="v">93.2%</div></div>
+          <div class="p-kpi"><div class="l">Avg Power</div><div class="v">8.4W</div></div>
+          <div class="p-kpi"><div class="l">Latency</div><div class="v">42ms</div></div>
+        </div>
+
+        <!-- Maritime ISR scenario -->
+        <div class="p-banner maritime">
+          <div>
+            <span class="p-banner-icon mar">◉</span>
+            <span class="p-banner-title">Defense ISR (Maritime) — Strait of Hormuz</span>
+            <span style="color: var(--text-muted); margin-left: 8px; font-size: 0.65rem; font-family: 'SF Mono', monospace;">8 TILES · S1 SAR</span>
+          </div>
+          <div class="p-chips">
+            <span class="p-chip keep">KEEP 3</span>
+            <span class="p-chip filter">FILTER 5</span>
+            <span class="p-chip items">★ 30 ITEMS</span>
+            <span class="p-chip bw">BW · 91%</span>
+          </div>
+        </div>
+
+        <!-- Tile cards -->
+        <div class="p-tiles">
+          <!-- KEEP tile with detections -->
+          <div class="p-tile keep">
+            <div>
+              <div class="p-tile-name">Tile 1: Vessel formation 27.37°N 55.06°E</div>
+              <span class="p-decision keep">KEEP</span>
+              <div class="p-tile-score">Score: 0.910</div>
+              <div class="p-mini-chip">★ 2 ships, 1 dark-ship</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Cloud</div>
+              <div class="p-meter"><i style="width: 12%; background:linear-gradient(90deg,#4a90e2,#6ec1e4);"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">12%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Anomaly</div>
+              <div class="p-meter"><i style="width: 74%; background:linear-gradient(90deg,#ffaa00,#ffcc00);"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">74%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Value</div>
+              <div class="p-meter"><i style="width: 89%; background:linear-gradient(90deg,#00d68f,#1afa9e);"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">89%</div>
+            </div>
+            <div class="p-explain">
+              <b>Step 1:</b> HIGH urgency — 2 ships, 1 dark-ship<br>
+              <b>Step 2:</b> KEEP full resolution + flag for downlink<br>
+              <b>Step 3:</b> TRIGGER follow-up imaging on next pass
+            </div>
+          </div>
+
+          <!-- KEEP — dark ship detection -->
+          <div class="p-tile keep">
+            <div>
+              <div class="p-tile-name">Tile 2: Unidentified vessel — no AIS</div>
+              <span class="p-decision keep">KEEP</span>
+              <div class="p-tile-score">Score: 0.987</div>
+              <div class="p-mini-chip" style="background:rgba(255,82,82,0.15); color:var(--danger); border-color:var(--danger);">⚠ 1 dark-ship</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Cloud</div>
+              <div class="p-meter"><i style="width: 8%;"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">8%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Anomaly</div>
+              <div class="p-meter"><i style="width: 92%; background:linear-gradient(90deg,#ff5252,#ff8a80);"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">92%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Value</div>
+              <div class="p-meter"><i style="width: 95%; background:linear-gradient(90deg,#00d68f,#1afa9e);"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">95%</div>
+            </div>
+            <div class="p-explain">
+              Vessel ~80m detected, no AIS broadcast match in 3 h window.<br>
+              <span style="color: var(--danger); font-weight: 600;">⚠ Dark-ship anomaly</span> — recommend cross-cue.
+            </div>
+          </div>
+
+          <!-- FILTER tile -->
+          <div class="p-tile filter">
+            <div>
+              <div class="p-tile-name">Tile 3: Open ocean — no targets</div>
+              <span class="p-decision filter">FILTER</span>
+              <div class="p-tile-score">Score: 0.122</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Cloud</div>
+              <div class="p-meter"><i style="width: 28%;"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">28%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Anomaly</div>
+              <div class="p-meter"><i style="width: 5%;"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">5%</div>
+            </div>
+            <div>
+              <div class="p-meter-label">Value</div>
+              <div class="p-meter"><i style="width: 12%;"></i></div>
+              <div class="p-meter-label" style="margin-top:2px;">12%</div>
+            </div>
+            <div class="p-explain">
+              CNN-only decision — low value tile, no detections.<br>
+              Action: <b>COMPRESS to thumbnail</b>. Bandwidth saved: <b>95%</b>.
+            </div>
+          </div>
+        </div>
+
+        <!-- Wildfire scenario header (collapsed preview) -->
+        <div class="p-banner" style="margin-top: 14px;">
+          <div>
+            <span class="p-banner-icon fire">🔥</span>
+            <span class="p-banner-title">Wildfire Detection (California) — FIRMS overlay</span>
+            <span style="color: var(--text-muted); margin-left: 8px; font-size: 0.65rem; font-family: 'SF Mono', monospace;">8 TILES · S2 + FIRMS</span>
+          </div>
+          <div class="p-chips">
+            <span class="p-chip keep">KEEP 2</span>
+            <span class="p-chip filter">FILTER 6</span>
+            <span class="p-chip items">★ 5 ITEMS</span>
+            <span class="p-chip bw">BW · 92%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p style="text-align:center; color: var(--text-muted); margin-top: 1.2rem; font-size: 0.85rem;">
+      Above is a CSS-rendered preview of the live dashboard.
+      The actual app pulls real satellite data and runs the same triage pipeline in your browser.
+    </p>
   </section>
 
   <!-- FEATURES -->

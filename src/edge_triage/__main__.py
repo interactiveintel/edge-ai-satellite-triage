@@ -117,89 +117,432 @@ def _run_streamlit_dashboard() -> None:
 
     # ── Page config ────────────────────────────────────────────
     st.set_page_config(
-        page_title="Edge AI Triage Platform",
+        page_title="Edge AI Triage — Mission Control",
+        page_icon="🛰",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    # ── Custom CSS ─────────────────────────────────────────────
+    # ── Custom CSS — defense / mission-control aesthetic ───────
     st.markdown("""
     <style>
-    /* Header banner */
-    .header-banner {
-        background: linear-gradient(135deg, #0d1b2a 0%, #1b2838 40%, #1a3a5c 100%);
-        color: #e0e8f0;
-        padding: 1.6rem 2rem;
-        border-radius: 10px;
-        margin-bottom: 1.2rem;
-        border: 1px solid #2a4a6a;
+    /* ============================================================
+       DESIGN TOKENS — single source of truth for the dark ISR theme
+       ============================================================ */
+    :root {
+        --bg-deep:        #0a0e1a;
+        --bg-surface:     #131826;
+        --bg-elevated:    #1a2238;
+        --bg-card:        #1d2742;
+        --border:         #2a3548;
+        --border-strong:  #3a4860;
+        --text-primary:   #e8edf5;
+        --text-secondary: #8a94a6;
+        --text-muted:     #5a6478;
+        --accent:         #4a90e2;
+        --accent-bright:  #6ec1e4;
+        --success:        #00d68f;
+        --success-dim:    #1c4d3a;
+        --warning:        #ffaa00;
+        --danger:         #ff5252;
+        --danger-dim:     #4d1c1c;
+        --info:           #82b1ff;
+        --gradient-hdr:   linear-gradient(135deg, #0a0e1a 0%, #131c33 35%, #1a2944 70%, #1e3a5f 100%);
+        --shadow-soft:    0 1px 3px rgba(0,0,0,0.4);
+        --shadow-elev:    0 4px 16px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.3);
     }
-    .header-banner h1 { margin: 0; font-size: 1.6rem; font-weight: 700; letter-spacing: 1px; color: #ffffff; }
-    .header-banner .subtitle { margin: 0.3rem 0 0; font-size: 0.9rem; opacity: 0.75; }
-    .header-banner .version { float: right; font-size: 0.8rem; opacity: 0.5; margin-top: 0.3rem; }
 
-    /* Decision badges */
-    .decision-keep {
+    /* ============================================================
+       GLOBAL
+       ============================================================ */
+    html, body, [data-testid="stAppViewContainer"] {
+        background: var(--bg-deep) !important;
+        color: var(--text-primary) !important;
+        font-family: -apple-system, "Inter", "Segoe UI", Roboto, sans-serif !important;
+    }
+    .main .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 2rem !important;
+        max-width: 1500px !important;
+    }
+    h1, h2, h3, h4, h5, h6, p, span, div, label {
+        color: var(--text-primary);
+    }
+    .stMarkdown p { color: var(--text-primary); }
+
+    /* ============================================================
+       HEADER BANNER — mission control look
+       ============================================================ */
+    .mc-header {
+        background: var(--gradient-hdr);
+        border: 1px solid var(--border-strong);
+        border-radius: 12px;
+        padding: 1.4rem 1.8rem;
+        margin-bottom: 1rem;
+        box-shadow: var(--shadow-elev);
+        position: relative;
+        overflow: hidden;
+    }
+    .mc-header::before {
+        content: "";
+        position: absolute; top: 0; left: 0; right: 0; height: 2px;
+        background: linear-gradient(90deg, transparent, var(--accent-bright) 25%, var(--success) 50%, var(--accent-bright) 75%, transparent);
+        opacity: 0.6;
+    }
+    .mc-header-grid {
+        display: flex; justify-content: space-between; align-items: center; gap: 2rem;
+    }
+    .mc-title-block { flex: 1; min-width: 0; }
+    .mc-classification {
         display: inline-block;
-        background: #1b5e20; color: #ffffff;
-        padding: 4px 16px; border-radius: 6px;
-        font-weight: 700; font-size: 1.1rem; letter-spacing: 1px;
+        background: rgba(0, 214, 143, 0.12);
+        color: var(--success);
+        border: 1px solid var(--success);
+        padding: 2px 10px;
+        border-radius: 3px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        margin-bottom: 0.5rem;
+    }
+    .mc-title {
+        font-size: 1.65rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        margin: 0;
+        color: #fff;
+        text-transform: uppercase;
+        line-height: 1.1;
+    }
+    .mc-title .accent { color: var(--accent-bright); }
+    .mc-subtitle {
+        margin: 0.4rem 0 0;
+        color: var(--text-secondary);
+        font-size: 0.85rem;
+        letter-spacing: 0.04em;
+    }
+    .mc-status-block { display: flex; gap: 1.5rem; align-items: center; }
+    .mc-stat {
+        text-align: right;
+        min-width: 80px;
+        padding-left: 1.2rem;
+        border-left: 1px solid var(--border);
+    }
+    .mc-stat-value {
+        font-family: "SF Mono", "Menlo", "Consolas", monospace;
+        font-size: 1.15rem;
+        font-weight: 700;
+        color: #fff;
+        line-height: 1;
+    }
+    .mc-stat-label {
+        font-size: 0.65rem;
+        color: var(--text-muted);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        margin-top: 4px;
+    }
+    .mc-live-dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        background: var(--success);
+        border-radius: 50%;
+        margin-right: 6px;
+        box-shadow: 0 0 8px var(--success);
+        animation: mc-pulse 2s infinite;
+    }
+    @keyframes mc-pulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.4; }
+    }
+
+    /* ============================================================
+       TABS — pill style
+       ============================================================ */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        background: var(--bg-surface);
+        padding: 6px;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        margin-bottom: 1rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 38px;
+        padding: 0 18px;
+        background: transparent !important;
+        color: var(--text-secondary) !important;
+        border-radius: 6px !important;
+        font-weight: 600;
+        font-size: 0.85rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        transition: all 0.15s ease;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: var(--text-primary) !important;
+        background: rgba(74, 144, 226, 0.08) !important;
+    }
+    .stTabs [aria-selected="true"] {
+        background: var(--accent) !important;
+        color: #fff !important;
+        box-shadow: 0 2px 8px rgba(74, 144, 226, 0.3);
+    }
+
+    /* ============================================================
+       SIDEBAR
+       ============================================================ */
+    [data-testid="stSidebar"] {
+        background: var(--bg-surface) !important;
+        border-right: 1px solid var(--border);
+    }
+    [data-testid="stSidebar"] > div { padding-top: 1.2rem; }
+    .sb-section-header {
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: var(--accent-bright);
+        margin: 1.2rem 0 0.5rem;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .sb-section-header .icon {
+        display: inline-block; width: 6px; height: 6px;
+        background: var(--accent-bright); border-radius: 50%;
+        box-shadow: 0 0 4px var(--accent-bright);
+    }
+    .sb-foot {
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        text-align: center;
+        padding: 1rem 0.5rem;
+        border-top: 1px solid var(--border);
+        margin-top: 1.5rem;
+        line-height: 1.6;
+    }
+    .sb-foot strong { color: var(--text-secondary); }
+
+    /* ============================================================
+       KPI METRICS — bigger, cleaner
+       ============================================================ */
+    [data-testid="stMetric"] {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1rem 1.1rem;
+        transition: all 0.2s ease;
+    }
+    [data-testid="stMetric"]:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 1px var(--accent), var(--shadow-elev);
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.7rem !important;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--text-muted) !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-family: "SF Mono", "Menlo", "Consolas", monospace !important;
+        font-size: 1.6rem !important;
+        color: var(--text-primary) !important;
+        font-weight: 700 !important;
+    }
+
+    /* ============================================================
+       DECISION BADGES
+       ============================================================ */
+    .decision-keep, .decision-filter {
+        display: inline-block;
+        padding: 5px 14px;
+        border-radius: 4px;
+        font-weight: 700;
+        font-size: 0.85rem;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-family: "SF Mono", "Menlo", monospace;
+    }
+    .decision-keep {
+        background: rgba(0, 214, 143, 0.15);
+        color: var(--success);
+        border: 1px solid var(--success);
+        box-shadow: 0 0 12px rgba(0, 214, 143, 0.25);
     }
     .decision-filter {
-        display: inline-block;
-        background: #b71c1c; color: #ffffff;
-        padding: 4px 16px; border-radius: 6px;
-        font-weight: 700; font-size: 1.1rem; letter-spacing: 1px;
+        background: rgba(255, 82, 82, 0.12);
+        color: var(--danger);
+        border: 1px solid var(--danger);
     }
 
-    /* Score bars */
-    .score-bar-container { margin: 4px 0; }
-    .score-bar-bg {
-        background: #e0e0e0; border-radius: 4px; height: 20px;
-        overflow: hidden; position: relative;
-    }
-    .score-bar-fill {
-        height: 100%; border-radius: 4px;
-        transition: width 0.3s ease;
-    }
-    .score-bar-label {
-        position: absolute; top: 0; left: 8px; line-height: 20px;
-        font-size: 0.75rem; font-weight: 600; color: #333;
-    }
-
-    /* Tile result cards */
+    /* ============================================================
+       TILE RESULT CARDS
+       ============================================================ */
     .tile-card {
-        border: 1px solid #ddd; border-radius: 8px;
-        padding: 1rem; margin: 0.5rem 0;
-        background: #fafbfc;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1rem 1.2rem;
+        margin: 0.7rem 0;
+        box-shadow: var(--shadow-soft);
+        transition: all 0.2s ease;
+        position: relative;
+        overflow: hidden;
     }
-    .tile-card.keep { border-left: 4px solid #2e7d32; }
-    .tile-card.filter { border-left: 4px solid #c62828; }
+    .tile-card:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-elev);
+        border-color: var(--border-strong);
+    }
+    .tile-card.keep::before, .tile-card.filter::before {
+        content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+        width: 3px;
+    }
+    .tile-card.keep::before   { background: var(--success); box-shadow: 0 0 12px var(--success); }
+    .tile-card.filter::before { background: var(--danger); }
+    .tile-card * { color: var(--text-primary); }
 
-    /* Status indicators */
-    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-    .status-dot.green { background: #2e7d32; }
-    .status-dot.amber { background: #f57c00; }
-    .status-dot.red { background: #c62828; }
+    /* ============================================================
+       PROGRESS BARS
+       ============================================================ */
+    .stProgress > div > div > div {
+        background: var(--bg-elevated) !important;
+        border-radius: 3px !important;
+    }
+    .stProgress > div > div > div > div {
+        background: linear-gradient(90deg, var(--accent), var(--accent-bright)) !important;
+        border-radius: 3px !important;
+    }
 
-    /* KPI row */
-    .kpi-row { display: flex; gap: 1rem; margin: 0.5rem 0 1rem; }
+    /* ============================================================
+       SELECTS / INPUTS / TOGGLES
+       ============================================================ */
+    .stSelectbox > div > div,
+    .stTextInput > div > div > input,
+    .stMultiSelect > div > div {
+        background: var(--bg-elevated) !important;
+        border: 1px solid var(--border) !important;
+        color: var(--text-primary) !important;
+    }
+    .stTextInput > div > div > input::placeholder { color: var(--text-muted); }
+    .stRadio label, .stCheckbox label { color: var(--text-secondary) !important; }
 
-    /* Sidebar polish */
-    section[data-testid="stSidebar"] > div { padding-top: 1rem; }
+    /* ============================================================
+       BUTTONS
+       ============================================================ */
+    .stButton > button {
+        background: var(--bg-elevated);
+        color: var(--text-primary);
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        transition: all 0.15s ease;
+    }
+    .stButton > button:hover {
+        background: var(--bg-card);
+        border-color: var(--accent);
+        color: var(--accent-bright);
+    }
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, var(--accent), #2962ff);
+        border: none;
+        color: #fff;
+        box-shadow: 0 2px 8px rgba(74, 144, 226, 0.3);
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(135deg, #5ba0f2, #3a72ff);
+        box-shadow: 0 4px 12px rgba(74, 144, 226, 0.5);
+        color: #fff;
+    }
 
-    /* Hide Streamlit branding */
-    #MainMenu { visibility: hidden; }
-    footer { visibility: hidden; }
+    /* ============================================================
+       DATAFRAMES
+       ============================================================ */
+    [data-testid="stDataFrame"] {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+    }
+
+    /* ============================================================
+       EXPANDERS
+       ============================================================ */
+    [data-testid="stExpander"] {
+        background: var(--bg-surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin-top: 6px;
+    }
+    [data-testid="stExpander"] summary {
+        color: var(--text-secondary);
+        font-weight: 600;
+        font-size: 0.85rem;
+    }
+    [data-testid="stExpander"]:hover { border-color: var(--border-strong); }
+
+    /* ============================================================
+       INFO / WARNING / SUCCESS BOXES
+       ============================================================ */
+    [data-baseweb="notification"] { border-radius: 8px !important; }
+
+    /* ============================================================
+       SCROLLBARS
+       ============================================================ */
+    ::-webkit-scrollbar       { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--bg-deep); }
+    ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* ============================================================
+       HIDE STREAMLIT CHROME
+       ============================================================ */
+    #MainMenu, footer, header[data-testid="stHeader"] { visibility: hidden; }
+    .stDeployButton { display: none; }
     </style>
     """, unsafe_allow_html=True)
 
-    # ── Header ─────────────────────────────────────────────────
+    # ── Mission-control header ─────────────────────────────────
+    import time as _time
+    _utc_now = _time.strftime("%Y-%m-%d  %H:%M UTC", _time.gmtime())
+    _session_tiles = len(st.session_state.get("results", [])) if "results" in st.session_state else 0
+
     st.markdown(f"""
-    <div class="header-banner">
-        <span class="version">v{__version__}</span>
-        <h1>EDGE AI SATELLITE DATA TRIAGE</h1>
-        <p class="subtitle">Agentic Onboard Filtering &mdash; Dual-Use Space &amp; Ground &mdash; NVIDIA Jetson Orin &mdash; &lt;{config.POWER_BUDGET_WATTS:.0f}W Power Budget</p>
+    <div class="mc-header">
+      <div class="mc-header-grid">
+        <div class="mc-title-block">
+          <div class="mc-classification">
+            <span class="mc-live-dot"></span>System Operational · Dual-Use ISR
+          </div>
+          <h1 class="mc-title">Edge AI <span class="accent">Satellite Triage</span></h1>
+          <p class="mc-subtitle">
+            Onboard agentic filtering · Real-time SAR &amp; optical pipelines · NVIDIA Jetson Orin · Under {config.POWER_BUDGET_WATTS:.0f} W
+          </p>
+        </div>
+        <div class="mc-status-block">
+          <div class="mc-stat">
+            <div class="mc-stat-value">{_utc_now.split('  ')[1]}</div>
+            <div class="mc-stat-label">UTC TIME</div>
+          </div>
+          <div class="mc-stat">
+            <div class="mc-stat-value">{config.POWER_BUDGET_WATTS:.0f}<span style="font-size:0.8rem; color:var(--text-muted);"> W</span></div>
+            <div class="mc-stat-label">Power Budget</div>
+          </div>
+          <div class="mc-stat">
+            <div class="mc-stat-value">{_session_tiles}</div>
+            <div class="mc-stat-label">Session Tiles</div>
+          </div>
+          <div class="mc-stat">
+            <div class="mc-stat-value" style="color: var(--success);">●</div>
+            <div class="mc-stat-label">v{__version__}</div>
+          </div>
+        </div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -211,7 +554,10 @@ def _run_streamlit_dashboard() -> None:
 
     # ── Sidebar ────────────────────────────────────────────────
     with st.sidebar:
-        st.markdown("### Mission Configuration")
+        st.markdown(
+            '<div class="sb-section-header"><span class="icon"></span>Mission Profile</div>',
+            unsafe_allow_html=True,
+        )
 
         config.MODE = st.radio(
             "Operating Mode",
@@ -235,8 +581,10 @@ def _run_streamlit_dashboard() -> None:
         else:
             mission_context = context_presets[preset]
 
-        st.markdown("---")
-        st.markdown("### System Controls")
+        st.markdown(
+            '<div class="sb-section-header"><span class="icon"></span>System Controls</div>',
+            unsafe_allow_html=True,
+        )
 
         config.POWER_BUDGET_WATTS = st.slider(
             "Power Budget (W)", 7.0, 30.0, config.POWER_BUDGET_WATTS, 0.5,
@@ -259,8 +607,10 @@ def _run_streamlit_dashboard() -> None:
             help="Minimum confidence for a detection to be counted",
         )
 
-        st.markdown("---")
-        st.markdown("### Input Source")
+        st.markdown(
+            '<div class="sb-section-header"><span class="icon"></span>Data Source</div>',
+            unsafe_allow_html=True,
+        )
 
         input_mode = st.radio(
             "Tile Source",
@@ -291,18 +641,22 @@ def _run_streamlit_dashboard() -> None:
                 default=["Wildfire Detection (California)", "Defense ISR (Maritime)", "Disaster Response (Earthquake)"],
             )
 
-        st.markdown("---")
         st.markdown(f"""
-        <div style="font-size: 0.75rem; opacity: 0.6; text-align: center;">
-        Edge Triage v{__version__}<br>
-        MobileNetV3 + ReAct Agent<br>
-        Target: Jetson Orin Nano/AGX
+        <div class="sb-foot">
+          <strong>EDGE TRIAGE</strong> v{__version__}<br>
+          MobileNetV3 · YOLOv8 · ReAct<br>
+          Jetson Orin Nano / AGX / Thor<br>
+          <span style="color: var(--success);">●</span> Online
         </div>
         """, unsafe_allow_html=True)
 
     # ── Main tabs ──────────────────────────────────────────────
     tab_triage, tab_live, tab_analytics, tab_audit, tab_system = st.tabs([
-        "Triage Pipeline", "Live Feed", "Analytics", "Audit Trail", "System Status",
+        "◆  Triage Pipeline",
+        "◉  Live Feed",
+        "▤  Analytics",
+        "⛨  Audit Trail",
+        "◈  System Status",
     ])
 
     # ════════════════════════════════════════════════════════════
@@ -488,33 +842,46 @@ def _run_streamlit_dashboard() -> None:
                 )
 
                 scenario_colors = {
-                    "Wildfire Detection": "#e65100",
-                    "Defense ISR": "#1565c0",
-                    "Disaster Response": "#c62828",
+                    "Wildfire Detection": ("#ff7043", "🔥"),
+                    "Defense ISR":        ("#42a5f5", "◉"),
+                    "Disaster Response":  ("#ef5350", "⚠"),
                 }
-                bar_color = scenario_colors.get(scenario_key, "#37474f")
+                bar_color, icon = scenario_colors.get(scenario_key, ("#78909c", "◇"))
 
                 st.markdown(f"""
-                <div style="background: linear-gradient(90deg, {bar_color} 0%, {bar_color}33 100%);
-                            color: #fff; padding: 0.8rem 1.2rem; border-radius: 8px; margin: 1rem 0 0.5rem;">
+                <div style="background: linear-gradient(90deg, {bar_color}1a 0%, transparent 100%);
+                            border-left: 3px solid {bar_color};
+                            color: var(--text-primary); padding: 0.85rem 1.2rem;
+                            border-radius: 8px; margin: 1.4rem 0 0.6rem;
+                            border-top: 1px solid var(--border);
+                            border-right: 1px solid var(--border);
+                            border-bottom: 1px solid var(--border);">
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
-                            <strong style="font-size: 1.1rem;">{scenario_key}</strong>
-                            <span style="opacity: 0.8; margin-left: 0.8rem; font-size: 0.85rem;">
-                                {len(group)} tiles
+                            <span style="color: {bar_color}; font-size: 1.1rem; margin-right: 8px;">{icon}</span>
+                            <strong style="font-size: 1.05rem; letter-spacing: 0.04em;">{scenario_key}</strong>
+                            <span style="color: var(--text-muted); margin-left: 0.8rem; font-size: 0.8rem;
+                                         font-family: 'SF Mono', monospace;">
+                                {len(group)} TILES
                             </span>
                         </div>
-                        <div style="font-size: 0.85rem;">
-                            <span style="background: #1b5e20; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
+                        <div style="font-size: 0.78rem; font-family: 'SF Mono', monospace; font-weight: 600;">
+                            <span style="background: rgba(0,214,143,0.15); color: var(--success);
+                                         border: 1px solid var(--success);
+                                         padding: 3px 10px; border-radius: 4px; margin-right: 6px;">
                                 KEEP {group_kept}
                             </span>
-                            <span style="background: #b71c1c; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
+                            <span style="background: rgba(255,82,82,0.10); color: var(--danger);
+                                         border: 1px solid var(--danger);
+                                         padding: 3px 10px; border-radius: 4px; margin-right: 6px;">
                                 FILTER {group_filtered}
                             </span>
-                            <span style="background: #0d47a1; padding: 2px 10px; border-radius: 4px; margin-right: 6px;">
-                                &#9733; {group_items} items
+                            <span style="background: rgba(74,144,226,0.12); color: var(--accent-bright);
+                                         border: 1px solid var(--accent);
+                                         padding: 3px 10px; border-radius: 4px; margin-right: 6px;">
+                                ★ {group_items} ITEMS
                             </span>
-                            <span style="opacity: 0.8;">BW saved: {group_bw:.0f}%</span>
+                            <span style="color: var(--text-muted);">BW SAVED · {group_bw:.0f}%</span>
                         </div>
                     </div>
                 </div>
@@ -540,10 +907,14 @@ def _run_streamlit_dashboard() -> None:
                             # Items-of-interest chip
                             if result.detection_result and result.detection_result.count > 0:
                                 st.markdown(
-                                    f'<div style="margin-top:4px; background:#0d47a1; color:#fff; '
-                                    f'padding:3px 10px; border-radius:12px; font-size:0.78rem; '
-                                    f'display:inline-block; font-weight:600;">'
-                                    f'&#9733; {result.detection_result.summary()}</div>',
+                                    f'<div style="margin-top:6px; '
+                                    f'background:rgba(74,144,226,0.12); '
+                                    f'color:var(--accent-bright); '
+                                    f'border:1px solid var(--accent); '
+                                    f'padding:3px 12px; border-radius:4px; font-size:0.78rem; '
+                                    f'display:inline-block; font-weight:600; '
+                                    f'font-family:\'SF Mono\', monospace; letter-spacing:0.04em;">'
+                                    f'★ {result.detection_result.summary()}</div>',
                                     unsafe_allow_html=True,
                                 )
 
@@ -931,16 +1302,28 @@ def _run_streamlit_dashboard() -> None:
                         if ship_result is not None and ship_result.count > 0:
                             dark = ship_result.dark_ship_count
                             dark_banner = (
-                                f'<span style="background:#7f0000; color:#fff; padding:3px 10px; '
-                                f'border-radius:4px; font-weight:700;">&#9888; {dark} DARK SHIPS</span>'
+                                f'<span style="background:rgba(255,82,82,0.18); color:var(--danger); '
+                                f'border:1px solid var(--danger); padding:3px 12px; border-radius:4px; '
+                                f'font-weight:700; font-family:\'SF Mono\',monospace; letter-spacing:0.06em;">'
+                                f'⚠ {dark} DARK SHIPS</span>'
                                 if dark else ""
                             )
                             st.markdown(
-                                f'<div style="background:#0a2540; color:#fff; padding:0.6rem 1rem; '
-                                f'border-radius:6px; margin-top:0.4rem;">'
-                                f'<strong>Maritime ISR</strong> — {ship_result.count} vessel'
-                                f'{"s" if ship_result.count != 1 else ""} detected '
-                                f'in {ship_result.inference_ms:.0f} ms  &nbsp; {dark_banner}'
+                                f'<div style="background: linear-gradient(90deg, rgba(74,144,226,0.18) 0%, transparent 100%); '
+                                f'border-left:3px solid var(--accent); '
+                                f'border-top:1px solid var(--border); border-right:1px solid var(--border); '
+                                f'border-bottom:1px solid var(--border); '
+                                f'padding:0.7rem 1.1rem; border-radius:8px; margin-top:0.5rem; '
+                                f'display:flex; justify-content:space-between; align-items:center;">'
+                                f'<div>'
+                                f'<span style="color: var(--accent-bright); font-size:0.7rem; '
+                                f'font-weight:700; letter-spacing:0.15em; text-transform:uppercase;">◉ Maritime ISR</span>'
+                                f'<div style="margin-top:3px; font-size:1.0rem; font-weight:600;">'
+                                f'{ship_result.count} vessel{"s" if ship_result.count != 1 else ""} detected '
+                                f'<span style="color: var(--text-muted); font-size:0.8rem; font-family:\'SF Mono\',monospace;">'
+                                f'· {ship_result.inference_ms:.0f} ms</span></div>'
+                                f'</div>'
+                                f'<div>{dark_banner}</div>'
                                 f'</div>',
                                 unsafe_allow_html=True,
                             )
